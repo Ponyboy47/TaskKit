@@ -1,0 +1,10 @@
+# Swift/Xcode
+.DS_Store
+/.build
+/Packages
+/*.xcodeproj
+/Packages.resolved
+
+# Vim
+*.sw[pon]
+*.vimsession
