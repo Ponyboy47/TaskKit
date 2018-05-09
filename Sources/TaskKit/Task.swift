@@ -29,3 +29,7 @@ public protocol PausableTask: Task {
 public protocol CancellableTask: Task {
     func cancel()
 }
+
+public protocol DependentTask: Task {
+    var dependencies: [Task] { get set }
+}
