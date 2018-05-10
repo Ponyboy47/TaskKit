@@ -17,16 +17,16 @@ public class TaskQueue {
 
     /// The running tasks that may be cancelled
     private var cancellables: [CancellableTask] {
-        return running.flatMap() {
+        return running.compactMap() {
             guard $0 is CancellableTask else { return nil }
-            return $0 as! CancellableTask
+            return ($0 as! CancellableTask)
         }
     }
     /// The waiting tasks that may have dependencies
     private var dependents: [DependentTask] {
-        return waiting.flatMap() {
+        return waiting.compactMap() {
             guard $0 is DependentTask else { return nil }
-            return $0 as! DependentTask
+            return ($0 as! DependentTask)
         }
     }
 
@@ -218,7 +218,7 @@ public class TaskQueue {
         defer { runningSemaphore.signal() }
 
         for _ in 0..<active {
-            running.dropFirst()
+            let _ = running.dropFirst()
         }
     }
 
