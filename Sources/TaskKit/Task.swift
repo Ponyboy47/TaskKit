@@ -71,3 +71,13 @@ public protocol DependentTask: Task {
     /// The tasks that must complete successfully before this task can run
     var dependencies: [Task] { get set }
 }
+
+public extension DependentTask {
+    public mutating func addDependency(_ task: Task) {
+        dependencies.append(task)
+    }
+
+    public mutating func add(dependency task: Task) {
+        dependencies.append(task)
+    }
+}
