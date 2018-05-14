@@ -1,7 +1,7 @@
 import Foundation
 import Dispatch
 
-public class TaskQueue {
+open class TaskQueue {
     /// The name of the TaskQueue
     public private(set) var name: String
 
@@ -36,7 +36,7 @@ public class TaskQueue {
 
     /// The waiting tasks that may have dependencies
     private var dependents: [DependentTask] {
-        var dependents = waiting.compactMap() {
+        let dependents = waiting.compactMap() {
             return $0 as? DependentTask
         }
         return dependents.map { dependentTasks(of: $0) }.flatMap { $0 }
