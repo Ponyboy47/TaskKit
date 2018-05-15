@@ -319,8 +319,34 @@ open class TaskQueue {
         }
     }
 
-    @available(*, renamed: "start")
-    public func resume() { self.start() }
+    /// Resumes execution of the running tasks
+    public func resume() {
+        runningSemaphore.waitAndRun() {
+            self.resumeAllTasks()
+        }
+
+        queue.resume()
+        isActive = true
+    }
+
+    private func resumeAllTasks() {
+        for (key, _) in running {
+            let task = running[key]
+
+            // Look at stopping the dispatch queue/group for other ones (or both)
+            if (task is PausableTask) {
+                let task: PausableTask! = task as? PausableTask
+                guard task.resume() else {
+                    var fail: Task! = running.removeValue(forKey: key)
+                    fail.status.state = .failed(.resumed)
+                    failed(fail)
+                    getNext = true
+                    continue
+                }
+                running[key]!.status.state = .resumed
+            }
+        }
+    }
 
     /// Pauses (AKA suspends) current execution of the running tasks and does not begin to run any new tasks
     public func pause() {
@@ -348,6 +374,7 @@ open class TaskQueue {
                     failed(fail)
                     continue
                 }
+                running[key]!.status.state = .paused
             }
         }
     }

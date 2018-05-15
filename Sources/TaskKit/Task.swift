@@ -51,6 +51,13 @@ public extension Task {
 
 public protocol PausableTask: Task {
     /**
+    Used to resume execution of your paused task
+
+    - Returns: Whether or not the task was successfully resumed
+    */
+    func resume() -> Bool
+
+    /**
     Used to pause execution of your task mid-run
 
     - Returns: Whether or not the task was successfully paused
