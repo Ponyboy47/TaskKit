@@ -9,7 +9,7 @@ public protocol Task {
     /// The Dispatch Quality of Service the task should use to execute
     var qos: DispatchQoS { get }
     /// A block to execute once the task finishes
-    var completionBlock: (TaskStatus) -> () { get set }
+    var completionBlock: (TaskStatus) -> () { get }
 
     /**
     Configures the task to be run
