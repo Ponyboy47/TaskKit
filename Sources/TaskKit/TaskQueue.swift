@@ -434,7 +434,13 @@ open class TaskQueue {
         }
     }
 
-    /// Cancel execution of all currently running tasks
+    /**
+    Cancel execution of all currently running tasks and prevents new tasks from being executed
+    After cancelling, you need to restart the queue with the .start() method
+
+    - Returns: The tasks that were cancelled. This may be useful to verify your tasks were all successfully cancelled
+    */
+    @discardableResult
     public func cancel() -> [Task] {
         queue.suspend()
         isActive = false
