@@ -162,6 +162,9 @@ open class TaskQueue {
             waiting.append(task)
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
+        if isActive && active < maxSimultaneous {
+            getNext = true
+        }
     }
 
     /**
@@ -173,6 +176,9 @@ open class TaskQueue {
         waitingSemaphore.waitAndRun() {
             waiting += tasks
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
+        }
+        if isActive && active < maxSimultaneous {
+            getNext = true
         }
     }
 
@@ -343,6 +349,7 @@ open class TaskQueue {
 
     /// Begins execution of the next task in the waiting list
     private func startNext() {
+        guard !waiting.isEmpty else { return }
         guard active < maxSimultaneous else { return }
 
         waitingSemaphore.waitAndRun() {
