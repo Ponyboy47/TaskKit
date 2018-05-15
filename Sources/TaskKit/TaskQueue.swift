@@ -83,16 +83,22 @@ open class TaskQueue {
     private var getNext: Bool {
         get { return _getNext }
         set {
-            getNextSemaphore.waitAndRun() {
-                _getNext = newValue
-            }
-            if newValue {
-                self.nextSemaphore.waitAndRun() {
-                    self.startNext()
+            if !waiting.isEmpty {
+                getNextSemaphore.waitAndRun() {
+                    _getNext = newValue
                 }
-                self.getNext = false
-            } else if active < maxSimultaneous {
-                self.getNext = true
+                if _getNext {
+                    nextSemaphore.waitAndRun() {
+                        startNext()
+                    }
+                    self.getNext = false
+                } else if active < maxSimultaneous {
+                    self.getNext = true
+                }
+            } else if _getNext {
+                getNextSemaphore.waitAndRun() {
+                    _getNext = false
+                }
             }
         }
     }
