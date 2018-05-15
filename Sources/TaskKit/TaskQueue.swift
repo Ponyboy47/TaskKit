@@ -181,6 +181,33 @@ open class TaskQueue {
         self.addTasks(tasks)
     }
 
+    /**
+    Adds a task to the task array, then sorts the task array based on its tasks' priorities
+
+    - Parameter task: The task to add
+    */
+    public func add(task: Task) {
+        self.addTask(task)
+    }
+
+    /**
+    Adds an array of tasks to the existing task array, then sorts the task array based on its tasks' priorities
+
+    - Parameter tasks: The tasks to add
+    */
+    public func add(tasks: [Task]) {
+        self.addTasks(tasks)
+    }
+
+    /**
+    Adds a variadic array of tasks to the existing task array, then sorts the task array based on its tasks' priorities
+
+    - Parameter tasks: The tasks to add
+    */
+    public func add(tasks: Task...) {
+        self.addTasks(tasks)
+    }
+
     /// Begin executing the tasks in the task array
     public func start() {
         // No need to start if we're already running
