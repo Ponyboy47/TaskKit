@@ -238,6 +238,7 @@ open class TaskQueue {
             var dependency: Task? = nil
             while !task.dependencies.isEmpty {
                 dependency = task.dependencies.removeFirst()
+                task.status.state = .dependency(dependency!)
 
                 guard prepare(&dependency!) else { break }
 
@@ -248,43 +249,41 @@ open class TaskQueue {
             }
 
             guard task.dependencies.isEmpty && dependency == nil else {
-                task.status.state = .failed(.dependency(dependency!))
-                failed(task)
+                failed(&task)
                 return false
             }
         }
+        task.status.state = .currently(.configuring)
 
         switch task.status.state {
         case .ready: 
             guard task.configure() else {
-                task.status.state = .failed(.configured)
-                failed(task)
+                failed(&task)
                 return false
             }
         default:
-            task.status.state = .failed(.configured)
-            failed(task)
+            failed(&task)
             return false
         }
 
-        task.status.state = .configured
+        task.status.state = .done(.configuring)
         return true
     }
 
     private func execute(_ task: Task, _ runningKey: UUID) -> Bool {
         runningSemaphore.waitAndRun() {
             running[runningKey] = task
-            running[runningKey]!.status.state = .executing
+            running[runningKey]!.status.state = .running
         }
 
         if running[runningKey]!.execute() {
+            running[runningKey]!.status.state = .done(.executing)
             return true
         }
 
         runningSemaphore.waitAndRun() {
             var task: Task! = running.removeValue(forKey: runningKey)
-            task.status.state = .failed(.executing)
-            failed(task)
+            failed(&task)
         }
 
         return false
@@ -294,23 +293,48 @@ open class TaskQueue {
         var returnVal: Bool = false
         runningSemaphore.waitAndRun() {
             var task: Task! = running.removeValue(forKey: runningKey)
+            task.status.state = .currently(.finishing)
 
             if task.finish() {
+                task.status.state = .succeeded
                 returnVal = true
+                task.completionBlock(task.status)
+                return
             }
 
-            task.status.state = .failed(.finished)
-            failed(task)
+            failed(&task)
 
             returnVal = false
         }
         return returnVal
     }
 
-    private func failed(_ task: Task) {
+    private func failed(_ task: inout CancellableTask!) {
+        var task: Task = task
+        failed(&task)
+    }
+
+    private func failed(_ task: inout DependentTask!) {
+        var task: Task = task
+        failed(&task)
+    }
+
+    private func failed(_ task: inout Task!) {
+        var task: Task = task
+        failed(&task)
+    }
+
+    private func failed(_ task: inout Task) {
+        switch task.status.state {
+        case .currently: fallthrough
+        case .dependency: task.status.state = .failed(task.status.state)
+        default: fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state.")
+        }
+
         erroredSemaphore.waitAndRun() {
             errored.append(task)
         }
+        task.completionBlock(task.status)
     }
 
     /// Begins execution of the next task in the waiting list
@@ -363,14 +387,14 @@ open class TaskQueue {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if (task is PausableTask) {
                 let task: PausableTask! = task as? PausableTask
+                running[key]!.status.state = .currently(.resuming)
                 guard task.resume() else {
                     var fail: Task! = running.removeValue(forKey: key)
-                    fail.status.state = .failed(.resumed)
-                    failed(fail)
+                    failed(&fail)
                     getNext = true
                     continue
                 }
-                running[key]!.status.state = .resumed
+                running[key]!.status.state = .currently(.executing)
             }
         }
     }
@@ -395,10 +419,10 @@ open class TaskQueue {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if (task is PausableTask) {
                 let task: PausableTask! = task as? PausableTask
+                running[key]!.status.state = .currently(.pausing)
                 guard task.pause() else {
                     var fail: Task! = running.removeValue(forKey: key)
-                    fail.status.state = .failed(.paused)
-                    failed(fail)
+                    failed(&fail)
                     continue
                 }
                 running[key]!.status.state = .paused
@@ -407,29 +431,36 @@ open class TaskQueue {
     }
 
     /// Cancel execution of all currently running tasks
-    public func cancel() {
-        runningSemaphore.waitAndRun() {
-            self.cancelAllTasks()
-        }
-
+    public func cancel() -> [Task] {
         queue.suspend()
         isActive = false
+
+        var cancelled: [Task] = []
+        runningSemaphore.waitAndRun() {
+            cancelled = self.cancelAllTasks()
+        }
+        return cancelled
     }
 
-    private func cancelAllTasks() {
+    private func cancelAllTasks() -> [Task] {
+        var cancelled: [Task] = []
         for (key, _) in running {
-            let task: Task! = running.removeValue(forKey: key)
+            var task: Task! = running.removeValue(forKey: key)
 
             // Look at stopping the dispatch queue/group for other ones (or both)
             if (task is CancellableTask) {
                 var task: CancellableTask! = task as? CancellableTask
+                task.status.state = .currently(.cancelling)
                 guard task.cancel() else {
-                    task.status.state = .failed(.cancelled)
-                    failed(task)
+                    failed(&task)
                     continue
                 }
             }
+            task.status.state = .cancelled
+            cancelled.append(task)
         }
+
+        return cancelled
     }
 
     /// Blocks execution until all tasks have finished executing (including the tasks not currently running)

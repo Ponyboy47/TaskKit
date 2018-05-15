@@ -8,6 +8,8 @@ public protocol Task {
     var priority: TaskPriority { get }
     /// The Dispatch Quality of Service the task should use to execute
     var qos: DispatchQoS { get }
+    /// A block to execute once the task finishes
+    var completionBlock: (TaskStatus) -> () { get set }
 
     /**
     Configures the task to be run
@@ -40,6 +42,7 @@ public protocol Task {
 
 public extension Task {
     public var priority: TaskPriority { return .minimal }
+    public var completionBlock: (TaskStatus) -> () { return { _ in } }
 
     public mutating func configure() -> Bool { return true }
 
