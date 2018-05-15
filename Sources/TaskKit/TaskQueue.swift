@@ -58,6 +58,10 @@ open class TaskQueue {
     public var count: Int {
         return waiting.count + dependencies + active
     }
+    /// Whether or not there are any tasks still executing or waiting to be executed
+    public var isEmpty: Bool {
+        return count == 0
+    }
 
     /// Tracks whether the DispatchQueue is currently running or if it is suspended
     private var isActive: Bool = false
