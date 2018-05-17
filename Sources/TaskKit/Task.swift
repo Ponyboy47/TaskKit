@@ -12,16 +12,6 @@ public protocol Task {
     var completionBlock: (TaskStatus) -> () { get }
 
     /**
-    Configures the task to be run
-
-    The default implementation just returns true. You should only implement
-    this if your task needs to do anything before it can be run successfully
-
-    - Returns: Whether or not the task was configured properly
-    */
-    mutating func configure() -> Bool
-
-    /**
     The code that will be ran when your task is performed
 
     - Returns: Whether or not the task finished execution successfully
@@ -32,24 +22,23 @@ public protocol Task {
     /**
     This is run after the task completes its execution. Any clean up code should go here
 
-    The default implementation just returns true. You should only implement
-    this if your task needs to do anything after it finishes running
-
     - Returns: Whether or not the task cleaned up properly
     */
     func finish() -> Bool
 }
 
 public extension Task {
-    public var priority: TaskPriority { return .minimal }
-    public var completionBlock: (TaskStatus) -> () { return { _ in } }
-
-    public mutating func configure() -> Bool { return true }
-
     @available(*, renamed: "execute")
     public func main() -> Bool { return execute() }
+}
 
-    public func finish() -> Bool { return true }
+public protocol ConfigurableTask: Task {
+    /**
+    Configures the task to be run
+
+    - Returns: Whether or not the task was configured properly
+    */
+    mutating func configure() -> Bool
 }
 
 public protocol PausableTask: Task {

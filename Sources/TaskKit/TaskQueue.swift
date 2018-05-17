@@ -8,38 +8,26 @@ open class TaskQueue {
     /// The tasks that are waiting to be run
     public private(set) var waiting: [Task] = []
     /// A semaphore to use for preventing simultaneous access to the waiting array
-    private var waitingSemaphore = DispatchSemaphore(value: 1)
+    private var _waitingSemaphore = DispatchSemaphore(value: 1)
 
     /// The tasks that are currently running
     public private(set) var running: [UUID: Task] = [:]
     /// A semaphore to use for preventing simultaneous access to the running array
-    private var runningSemaphore = DispatchSemaphore(value: 1)
+    private var _runningSemaphore = DispatchSemaphore(value: 1)
 
     /// The tasks that did not transition safely from one state to the next
-    public private(set) var errored: [Task] = []
-    /// A semaphore to use for preventing simultaneous access to the errored array
-    private var erroredSemaphore = DispatchSemaphore(value: 1)
+    public var errored: [Task] { return _errored.map { $0.value } }
+    /// Internally used to validate task dependencies completed successfully
+    public private(set) var _errored: [UUID: Task] = [:]
+    /// A semaphore to use for preventing simultaneous access to the _errored array
+    private var _erroredSemaphore = DispatchSemaphore(value: 1)
 
-    /// The running tasks that may be cancelled
-    private var pausables: [PausableTask] {
-        return running.compactMap() {
-            return $0.value as? PausableTask
-        }
-    }
-
-    /// The running tasks that may be cancelled
-    private var cancellables: [CancellableTask] {
-        return running.compactMap() {
-            return $0.value as? CancellableTask
-        }
-    }
-
-    /// The waiting tasks that may have dependencies
-    private var dependents: [DependentTask] {
-        let dependents = waiting.compactMap() {
+    /// The waiting tasks that may have _dependencies
+    private var _dependents: [DependentTask] {
+        let _dependents = waiting.compactMap() {
             return $0 as? DependentTask
         }
-        return dependents.map { dependentTasks(of: $0) }.flatMap { $0 }
+        return _dependents.map { dependentTasks(of: $0) }.flatMap { $0 }
     }
     private func dependentTasks(of task: DependentTask) -> [DependentTask] {
         return task.dependencies.compactMap() {
@@ -47,16 +35,16 @@ open class TaskQueue {
         }
     }
 
-    /// The count of waiting task dependencies
-    private var dependencies: Int {
-        return dependents.reduce(0, { return $0 + $1.dependencies.count })
+    /// The count of waiting task _dependencies
+    private var _dependencies: Int {
+        return _dependents.reduce(0, { return $0 + $1.dependencies.count })
     }
 
     /// The number of tasks that are currently running
     public var active: Int { return running.count }
     /// The total number of tasks left (including the currently running tasks)
     public var count: Int {
-        return waiting.count + dependencies + active
+        return waiting.count + _dependencies + active
     }
     /// Whether or not there are any tasks still executing or waiting to be executed
     public var isEmpty: Bool {
@@ -64,9 +52,9 @@ open class TaskQueue {
     }
 
     /// Tracks whether the DispatchQueue is currently running or if it is suspended
-    private var isActive: Bool = false
+    private var _isActive: Bool = false
     /// Whether or not the queue is currently running any tasks
-    public var isRunning: Bool { return isActive && active > 0 }
+    public var isRunning: Bool { return _isActive && active > 0 }
 
     /// The maximum number of tasks that can run simultaneously
     public var maxSimultaneous: Int
@@ -74,43 +62,41 @@ open class TaskQueue {
     /// The underlying DispatchQueue used to run the tasks
     public private(set) var queue: DispatchQueue
     /// The underlying DispatchGroups that tasks are added to when running
-    private var groups: [UUID: DispatchGroup] = [:]
-    /// A semaphore to use for preventing simultaneous access to the groups dictionary
-    private var groupSemaphore = DispatchSemaphore(value: 1)
+    private var _groups: [UUID: DispatchGroup] = [:]
+    /// A semaphore to use for preventing simultaneous access to the _groups dictionary
+    private var _groupsSemaphore = DispatchSemaphore(value: 1)
 
     /// When set to true, will grab the next task and begin executing it
-    private var _getNext: Bool = false
-    private var getNext: Bool {
-        get { return _getNext }
+    private var __getNext: Bool = false
+    private var _getNext: Bool {
+        get { return __getNext }
         set {
             if !waiting.isEmpty {
-                getNextSemaphore.waitAndRun() {
-                    _getNext = newValue
-                }
-                if _getNext {
-                    nextSemaphore.waitAndRun() {
-                        startNext()
+                _getNextSemaphore.waitAndRun() {
+                    __getNext = newValue
+                    if __getNext {
+                        _nextSemaphore.waitAndRun() {
+                            startNext()
+                        }
+                        self._getNext = false
+                    } else if active < maxSimultaneous {
+                        self._getNext = true
                     }
-                    self.getNext = false
-                } else if active < maxSimultaneous {
-                    self.getNext = true
                 }
-            } else if _getNext {
-                getNextSemaphore.waitAndRun() {
-                    _getNext = false
+            } else if __getNext {
+                _getNextSemaphore.waitAndRun() {
+                    __getNext = false
                 }
             }
         }
     }
-    /// A semaphore to use for preventing simultaneous access to the getNext boolean
-    private var getNextSemaphore = DispatchSemaphore(value: 1)
+    /// A semaphore to use for preventing simultaneous access to the _getNext boolean
+    private var _getNextSemaphore = DispatchSemaphore(value: 1)
     /// A semaphore to use for preventing simultaneous access to the startNext function
-    private var nextSemaphore = DispatchSemaphore(value: 1)
+    private var _nextSemaphore: DispatchSemaphore
 
     /// The default number of tasks that can run simultaneously
     public static let defaultMaxSimultaneous: Int = 1
-    /// A TaskQueue that runs on the main queue
-    public static let main = TaskQueue(queue: .main)
 
     /**
     Initialize a TaskQueue
@@ -122,40 +108,12 @@ open class TaskQueue {
     public init(_ name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous) {
         self.name = name
         self.maxSimultaneous = maxSimultaneous
+        self._nextSemaphore = DispatchSemaphore(value: maxSimultaneous)
 
-        if maxSimultaneous > 1 {
-            self.queue = DispatchQueue(label: "com.taskqueue.\(UUID().description)", attributes: .concurrent)
-        } else {
-            self.queue = DispatchQueue(label: "com.taskqueue.\(UUID().description)")
-        }
+        // If the queue doesn't run concurrently then this causes issues (especially with dependent tasks)
+        self.queue = DispatchQueue(label: "com.taskqueue.\(UUID().description)", attributes: .concurrent)
 
         self.queue.suspend()
-    }
-
-    /**
-    Initialize a TaskQueue
-
-    - Parameter:
-        - name: The name of the TaskQueue
-        - maxSimultaneous: The maximum number of tasks that can run simultaneously
-        - queue: The underlying DispatchQueue to use when running the tasks
-    */
-    public init(_ name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous, queue: DispatchQueue) {
-        self.name = name
-        self.maxSimultaneous = maxSimultaneous
-        self.queue = queue
-        self.queue.suspend()
-    }
-
-    /**
-    Initialize a TaskQueue. Uses the queue's label as the name for the TaskQueue
-
-    - Parameter:
-        - maxSimultaneous: The maximum number of tasks that can run simultaneously
-        - queue: The underlying DispatchQueue to use when running the tasks
-    */
-    public convenience init(maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous, queue: DispatchQueue) {
-        self.init(queue.label, maxSimultaneous: maxSimultaneous, queue: queue)
     }
 
     /**
@@ -164,12 +122,12 @@ open class TaskQueue {
     - Parameter task: The task to add
     */
     public func addTask(_ task: Task) {
-        waitingSemaphore.waitAndRun() {
+        _waitingSemaphore.waitAndRun() {
             waiting.append(task)
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
-        if isActive && active < maxSimultaneous {
-            getNext = true
+        if _isActive && active < maxSimultaneous {
+            _getNext = true
         }
     }
 
@@ -179,12 +137,12 @@ open class TaskQueue {
     - Parameter tasks: The tasks to add
     */
     public func addTasks(_ tasks: [Task]) {
-        waitingSemaphore.waitAndRun() {
+        _waitingSemaphore.waitAndRun() {
             waiting += tasks
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
-        if isActive && active < maxSimultaneous {
-            getNext = true
+        if _isActive && active < maxSimultaneous {
+            _getNext = true
         }
     }
 
@@ -194,7 +152,7 @@ open class TaskQueue {
     - Parameter tasks: The tasks to add
     */
     public func addTasks(_ tasks: Task...) {
-        self.addTasks(tasks)
+        addTasks(tasks)
     }
 
     /**
@@ -203,7 +161,7 @@ open class TaskQueue {
     - Parameter task: The task to add
     */
     public func add(task: Task) {
-        self.addTask(task)
+        addTask(task)
     }
 
     /**
@@ -212,7 +170,7 @@ open class TaskQueue {
     - Parameter tasks: The tasks to add
     */
     public func add(tasks: [Task]) {
-        self.addTasks(tasks)
+        addTasks(tasks)
     }
 
     /**
@@ -221,180 +179,243 @@ open class TaskQueue {
     - Parameter tasks: The tasks to add
     */
     public func add(tasks: Task...) {
-        self.addTasks(tasks)
+        addTasks(tasks)
     }
 
-    /// Begin executing the tasks in the task array
+    /// Begin executing the tasks in the waiting array
     public func start() {
         // No need to start if we're already running
         guard !isRunning else { return }
 
-        // Make sure that once we leave this function we resume the queue and set the isActive variable
+        // Make sure that once we leave this function we resume the queue and set the _isActive variable
         defer {
             queue.resume()
-            isActive = true
+            _isActive = true
         }
 
         // This should trigger startNext until there are maxSimultaneous tasks running
-        getNext = true
+        _getNext = true
     }
 
     /**
     Prepares to execute the task by ensuring all dependencies are run and that
-    it is in the ready state and sucessfully configures itself
+    it is in the ready state
 
     - Parameter task: The task to prepare
+    - Parameter taskKey: The unique key used to track the task
 
-    - Returns: Whether or not the task was successfully prepared for execution
+    - Returns: The task, if it was configured properly, or nil otherwise
     */
-    private func prepare(_ task: inout Task) -> Bool {
-        if (task is DependentTask) {
-            var task: DependentTask! = task as? DependentTask
+    private func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
+        var task = task
 
-            var dependency: Task? = nil
-            while !task.dependencies.isEmpty {
-                dependency = task.dependencies.removeFirst()
-                task.status.state = .dependency(dependency!)
+        var dependency: Task? = nil
+        while !task.dependencies.isEmpty {
+            let dep = task.dependencies.removeFirst()
 
-                guard prepare(&dependency!) else { break }
+            let depKey = start(dep, autostart: false)
+            _groups[depKey]!.wait()
 
-                let uniqueKey = UUID()
-                guard execute(dependency!, uniqueKey) else { break }
-                guard finish(uniqueKey) else { break }
-                dependency = nil
-            }
-
-            guard task.dependencies.isEmpty && dependency == nil else {
-                failed(&task)
-                return false
-            }
+            dependency = _errored[depKey]
+            guard dependency == nil else { break }
         }
-        task.status.state = .currently(.configuring)
 
+        guard task.dependencies.isEmpty && dependency == nil else {
+            task.status.state = .dependency(dependency!)
+            failed(task, with: taskKey)
+            return nil
+        }
+        return prepare(task as Task, with: taskKey)
+    }
+
+    /**
+    Prepares to execute the task by ensuring it is in the ready state
+
+    - Parameter task: The task to prepare
+    - Parameter taskKey: The unique key used to track the task
+
+    - Returns: The task, if it was configured properly, or nil otherwise
+    */
+    private func prepare(_ task: Task, with taskKey: UUID) -> Task? {
         switch task.status.state {
         case .ready: 
-            guard task.configure() else {
-                failed(&task)
-                return false
-            }
+            task.status.state = .done(.configuring)
         default:
-            failed(&task)
-            return false
+            failed(task, with: taskKey)
+            return nil
+        }
+
+        return task
+    }
+
+    /**
+    Configures the task before executing it
+
+    - Parameter task: The task to configure
+    - Parameter taskKey: The unique key used to track the task
+
+    - Returns: The task, if it was configured properly, or nil otherwise
+    */
+    private func configure(_ task: ConfigurableTask, with taskKey: UUID) -> Task? {
+        var task = task
+        task.status.state = .currently(.configuring)
+        guard task.configure() else {
+            failed(task, with: taskKey)
+            return nil
         }
 
         task.status.state = .done(.configuring)
+        return task
+    }
+
+    /**
+    Executes the task
+
+    - Parameter task: The task to configure
+    - Parameter taskKey: The unique key used to track the task
+
+    - Returns: Whether or not the task executed successfully
+    */
+    private func execute(_ task: Task, with taskKey: UUID) -> Bool {
+        _runningSemaphore.waitAndRun() {
+            running[taskKey] = task
+            running[taskKey]!.status.state = .running
+        }
+
+        guard running[taskKey]!.execute() else {
+            _runningSemaphore.waitAndRun() {
+                let task: Task! = running.removeValue(forKey: taskKey)
+                failed(task, with: taskKey)
+            }
+
+            return false
+        }
+
+        running[taskKey]!.status.state = .done(.executing)
         return true
     }
 
-    private func execute(_ task: Task, _ runningKey: UUID) -> Bool {
-        runningSemaphore.waitAndRun() {
-            running[runningKey] = task
-            running[runningKey]!.status.state = .running
+    /**
+    Finishes running the task (post execution clean up)
+
+    - Parameter taskKey: The unique key used to track the task
+
+    - Returns: Whether or not the task was finished successfully
+    */
+    private func finish(with taskKey: UUID) -> Bool {
+        _runningSemaphore.waitAndRun() {
+            running[taskKey]!.status.state = .currently(.finishing)
         }
 
-        if running[runningKey]!.execute() {
-            running[runningKey]!.status.state = .done(.executing)
-            return true
-        }
-
-        runningSemaphore.waitAndRun() {
-            var task: Task! = running.removeValue(forKey: runningKey)
-            failed(&task)
-        }
-
-        return false
-    }
-
-    private func finish(_ runningKey: UUID) -> Bool {
-        var returnVal: Bool = false
-        runningSemaphore.waitAndRun() {
-            var task: Task! = running.removeValue(forKey: runningKey)
-            task.status.state = .currently(.finishing)
-
-            if task.finish() {
-                task.status.state = .succeeded
-                returnVal = true
-                task.completionBlock(task.status)
-                return
+        guard running[taskKey]!.finish() else {
+            _runningSemaphore.waitAndRun() {
+                let task = running.removeValue(forKey: taskKey)!
+                failed(task, with: taskKey)
             }
-
-            failed(&task)
-
-            returnVal = false
+            return false
         }
-        return returnVal
+
+        return true
     }
 
-    private func failed(_ task: inout CancellableTask!) {
-        var task: Task = task
-        failed(&task)
-    }
+    /**
+    Called when the task failed at some stage
+    Sets the task to the failed state and places it in the errored dict
 
-    private func failed(_ task: inout DependentTask!) {
-        var task: Task = task
-        failed(&task)
-    }
-
-    private func failed(_ task: inout Task!) {
-        var task: Task = task
-        failed(&task)
-    }
-
-    private func failed(_ task: inout Task) {
+    - Parameter task: The task to configure
+    - Parameter taskKey: The unique key used to track the task
+    */
+    private func failed(_ task: Task, with taskKey: UUID) {
+        var task = task
         switch task.status.state {
-        case .currently: fallthrough
-        case .dependency: task.status.state = .failed(task.status.state)
-        default: fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state.")
+        case .dependency: fallthrough
+        case .currently: task.status.state = .failed(task.status.state)
+        default:
+            fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state. \(task.status.state)")
         }
 
-        erroredSemaphore.waitAndRun() {
-            errored.append(task)
+        _erroredSemaphore.waitAndRun() {
+            _errored[taskKey] = task
         }
-        task.completionBlock(task.status)
     }
 
     /// Begins execution of the next task in the waiting list
     private func startNext() {
-        guard !waiting.isEmpty else { return }
         guard active < maxSimultaneous else { return }
 
-        waitingSemaphore.waitAndRun() {
-            var next = self.waiting.removeFirst()
+        queue.async(qos: .background) {
+            self._waitingSemaphore.waitAndRun() {
+                guard let upNext = self.waiting.first else { return }
+                self.start(upNext)
+            }
+        }
+    }
 
-            let group = DispatchGroup()
-            let uniqueKey = UUID()
+    /**
+    Begins execution of the specified task and can set it to automatically start the next task once it finished
 
-            self.groupSemaphore.waitAndRun() {
-                self.groups[uniqueKey] = group
+    - Parameter task: The task to start
+    - Parameter autostart: Whether or not the current task should automatically start the next task in the waiting array upon completion
+
+    - Returns: The UUID used to track the task
+    */
+    @discardableResult
+    private func start(_ task: Task, autostart: Bool = true) -> UUID {
+        let group = DispatchGroup()
+        let uniqueKey = UUID()
+
+        _groupsSemaphore.waitAndRun() {
+            _groups[uniqueKey] = group
+        }
+
+        queue.async(group: group, qos: task.qos) {
+            var _task: Task?
+            if task is DependentTask {
+                _task = self.prepare(task as! DependentTask, with: uniqueKey)
+            } else {
+                _task = self.prepare(task, with: uniqueKey)
+            }
+            guard _task != nil else { return }
+
+            if task is ConfigurableTask {
+                _task = self.configure(_task as! ConfigurableTask, with: uniqueKey)
+                guard _task != nil else { return }
             }
 
-            self.queue.async(group: group, qos: next.qos) {
-                guard self.prepare(&next) else { return }
+            guard self.execute(_task!, with: uniqueKey) else { return }
+            guard self.finish(with: uniqueKey) else { return }
+        }
 
-                let uniqueKey = UUID()
+        setupNotify(using: group, with: uniqueKey, autostart)
 
-                guard self.execute(next, uniqueKey) else { return }
-                guard self.finish(uniqueKey) else { return }
+        return uniqueKey
+    }
+
+    private func setupNotify(using group: DispatchGroup, with uniqueKey: UUID, _ autostart: Bool) {
+        group.notify(qos: queue.qos, queue: queue) {
+            self._runningSemaphore.waitAndRun() {
+                let task = self.running.removeValue(forKey: uniqueKey)!
+                task.completionBlock(task.status)
+            }
+            self._groupsSemaphore.waitAndRun() {
+                self._groups.removeValue(forKey: uniqueKey)
             }
 
-            group.notify(qos: self.queue.qos, queue: self.queue) {
-                self.groupSemaphore.waitAndRun() {
-                    self.groups.removeValue(forKey: uniqueKey)
-                }
 
-                self.getNext = true
+            if (autostart) {
+                self._getNext = true
             }
         }
     }
 
     /// Resumes execution of the running tasks
     public func resume() {
-        runningSemaphore.waitAndRun() {
-            self.resumeAllTasks()
+        _runningSemaphore.waitAndRun() {
+            resumeAllTasks()
         }
 
         queue.resume()
-        isActive = true
+        _isActive = true
     }
 
     private func resumeAllTasks() {
@@ -406,9 +427,9 @@ open class TaskQueue {
                 let task: PausableTask! = task as? PausableTask
                 running[key]!.status.state = .currently(.resuming)
                 guard task.resume() else {
-                    var fail: Task! = running.removeValue(forKey: key)
-                    failed(&fail)
-                    getNext = true
+                    let fail: Task! = running.removeValue(forKey: key)
+                    failed(fail, with: key)
+                    _getNext = true
                     continue
                 }
                 running[key]!.status.state = .currently(.executing)
@@ -418,16 +439,16 @@ open class TaskQueue {
 
     /// Pauses (AKA suspends) current execution of the running tasks and does not begin to run any new tasks
     public func pause() {
-        runningSemaphore.waitAndRun() {
-            self.pauseAllTasks()
+        _runningSemaphore.waitAndRun() {
+            pauseAllTasks()
         }
 
         queue.suspend()
-        isActive = false
+        _isActive = false
     }
 
     @available(*, renamed: "pause")
-    public func suspend() { self.pause() }
+    public func suspend() { pause() }
 
     private func pauseAllTasks() {
         for (key, _) in running {
@@ -438,8 +459,8 @@ open class TaskQueue {
                 let task: PausableTask! = task as? PausableTask
                 running[key]!.status.state = .currently(.pausing)
                 guard task.pause() else {
-                    var fail: Task! = running.removeValue(forKey: key)
-                    failed(&fail)
+                    let fail: Task! = running.removeValue(forKey: key)
+                    failed(fail, with: key)
                     continue
                 }
                 running[key]!.status.state = .paused
@@ -456,11 +477,11 @@ open class TaskQueue {
     @discardableResult
     public func cancel() -> [Task] {
         queue.suspend()
-        isActive = false
+        _isActive = false
 
         var cancelled: [Task] = []
-        runningSemaphore.waitAndRun() {
-            cancelled = self.cancelAllTasks()
+        _runningSemaphore.waitAndRun() {
+            cancelled = cancelAllTasks()
         }
         return cancelled
     }
@@ -475,7 +496,7 @@ open class TaskQueue {
                 var task: CancellableTask! = task as? CancellableTask
                 task.status.state = .currently(.cancelling)
                 guard task.cancel() else {
-                    failed(&task)
+                    failed(task, with: key)
                     continue
                 }
             }
@@ -488,11 +509,11 @@ open class TaskQueue {
 
     /// Blocks execution until all tasks have finished executing (including the tasks not currently running)
     public func wait() {
-        while !groups.isEmpty {
+        while !_groups.isEmpty {
             var group: DispatchGroup!
-            groupSemaphore.waitAndRun() {
-                let (key, g) = groups.first!
-                groups.removeValue(forKey: key)
+            _groupsSemaphore.waitAndRun() {
+                let (key, g) = _groups.first!
+                _groups.removeValue(forKey: key)
                 group = g
             }
             group.wait()
@@ -507,7 +528,7 @@ open class TaskQueue {
     public func wait(timeout: DispatchTime) -> DispatchTimeoutResult {
         var results = [DispatchTimeoutResult]()
 
-        for (_, group) in groups {
+        for (_, group) in _groups {
             results.append(group.wait(timeout: timeout))
         }
 
@@ -525,7 +546,7 @@ open class TaskQueue {
     public func wait(wallTimeout timeout: DispatchWallTime) -> DispatchTimeoutResult {
         var results = [DispatchTimeoutResult]()
 
-        for (_, group) in groups {
+        for (_, group) in _groups {
             results.append(group.wait(wallTimeout: timeout))
         }
 
@@ -558,7 +579,7 @@ open class TaskQueue {
         - work: The work to be performed on the same dispatch queue as this TaskQueue once all of the tasks in this queue finish executing
     */
     public func notify(execute work: @escaping () -> ()) {
-        self.notify(qos: queue.qos, queue: queue, execute: work)
+        notify(qos: queue.qos, queue: queue, execute: work)
     }
     /**
     Schedules a block to be submitted to a queue with a specified quality of service class and configuration once all of the tasks in this queue finish executing
@@ -581,6 +602,6 @@ open class TaskQueue {
         - work: The work to be performed on the same dispatch queue as this TaskQueue once all of the tasks in this queue finish executing
     */
     public func notify(work: DispatchWorkItem) {
-        self.notify(queue: queue, work: work)
+        notify(queue: queue, work: work)
     }
 }
