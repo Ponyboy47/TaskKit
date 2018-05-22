@@ -1,6 +1,10 @@
 import Foundation
 import Dispatch
 
+// swiftlint:disable identifier_name
+// swiftlint:disable file_length
+// swiftlint:disable type_body_length
+
 open class TaskQueue {
     /// The name of the TaskQueue
     public private(set) var name: String
@@ -24,13 +28,13 @@ open class TaskQueue {
 
     /// The waiting tasks that may have _dependencies
     private var _dependents: [DependentTask] {
-        let _dependents = waiting.compactMap() {
+        let _dependents = waiting.compactMap {
             return $0 as? DependentTask
         }
         return _dependents.map { dependentTasks(of: $0) }.flatMap { $0 }
     }
     private func dependentTasks(of task: DependentTask) -> [DependentTask] {
-        return task.dependencies.compactMap() {
+        return task.dependencies.compactMap {
             return $0 as? DependentTask
         }
     }
@@ -71,29 +75,28 @@ open class TaskQueue {
     private var _getNext: Bool {
         get { return __getNext }
         set {
-            if !waiting.isEmpty {
-                _getNextSemaphore.waitAndRun() {
-                    __getNext = newValue
-                    if __getNext {
-                        _nextSemaphore.waitAndRun() {
-                            startNext()
-                        }
+            if newValue {
+                _getNextSemaphore.wait()
+                __getNext = newValue
+
+                if !waiting.isEmpty {
+                    queue.async(qos: .background) {
+                        self.startNext()
                         self._getNext = false
-                    } else if active < maxSimultaneous {
-                        self._getNext = true
                     }
-                }
-            } else if __getNext {
-                _getNextSemaphore.waitAndRun() {
+                } else {
                     __getNext = false
                 }
+
+                _getNextSemaphore.signal()
+            } else if active < maxSimultaneous {
+                _getNext = true
             }
         }
     }
+
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
     private var _getNextSemaphore = DispatchSemaphore(value: 1)
-    /// A semaphore to use for preventing simultaneous access to the startNext function
-    private var _nextSemaphore: DispatchSemaphore
 
     /// The default number of tasks that can run simultaneously
     public static let defaultMaxSimultaneous: Int = 1
@@ -108,7 +111,6 @@ open class TaskQueue {
     public init(_ name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous) {
         self.name = name
         self.maxSimultaneous = maxSimultaneous
-        self._nextSemaphore = DispatchSemaphore(value: maxSimultaneous)
 
         // If the queue doesn't run concurrently then this causes issues (especially with dependent tasks)
         self.queue = DispatchQueue(label: "com.taskqueue.\(UUID().description)", attributes: .concurrent)
@@ -122,12 +124,14 @@ open class TaskQueue {
     - Parameter task: The task to add
     */
     public func addTask(_ task: Task) {
-        _waitingSemaphore.waitAndRun() {
+        _waitingSemaphore.waitAndRun {
             waiting.append(task)
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
-        if _isActive && active < maxSimultaneous {
-            _getNext = true
+        if _isActive && !_getNext && active < maxSimultaneous {
+            queue.async(qos: .background) {
+                self._getNext = true
+            }
         }
     }
 
@@ -137,12 +141,14 @@ open class TaskQueue {
     - Parameter tasks: The tasks to add
     */
     public func addTasks(_ tasks: [Task]) {
-        _waitingSemaphore.waitAndRun() {
+        _waitingSemaphore.waitAndRun {
             waiting += tasks
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
-        if _isActive && active < maxSimultaneous {
-            _getNext = true
+        if _isActive && !_getNext && active < maxSimultaneous {
+            queue.async(qos: .background) {
+                self._getNext = true
+            }
         }
     }
 
@@ -213,7 +219,7 @@ open class TaskQueue {
         while !task.dependencies.isEmpty {
             let dep = task.dependencies.removeFirst()
 
-            let depKey = start(dep, autostart: false)
+            let depKey = start(dep, autostart: false, dependent: task)
             _groups[depKey]!.wait()
 
             dependency = _errored[depKey]
@@ -238,7 +244,7 @@ open class TaskQueue {
     */
     private func prepare(_ task: Task, with taskKey: UUID) -> Task? {
         switch task.status.state {
-        case .ready: 
+        case .ready:
             task.status.state = .done(.configuring)
         default:
             failed(task, with: taskKey)
@@ -277,13 +283,13 @@ open class TaskQueue {
     - Returns: Whether or not the task executed successfully
     */
     private func execute(_ task: Task, with taskKey: UUID) -> Bool {
-        _runningSemaphore.waitAndRun() {
+        _runningSemaphore.waitAndRun {
             running[taskKey] = task
             running[taskKey]!.status.state = .running
         }
 
         guard running[taskKey]!.execute() else {
-            _runningSemaphore.waitAndRun() {
+            _runningSemaphore.waitAndRun {
                 let task: Task! = running.removeValue(forKey: taskKey)
                 failed(task, with: taskKey)
             }
@@ -303,12 +309,12 @@ open class TaskQueue {
     - Returns: Whether or not the task was finished successfully
     */
     private func finish(with taskKey: UUID) -> Bool {
-        _runningSemaphore.waitAndRun() {
+        _runningSemaphore.waitAndRun {
             running[taskKey]!.status.state = .currently(.finishing)
         }
 
         guard running[taskKey]!.finish() else {
-            _runningSemaphore.waitAndRun() {
+            _runningSemaphore.waitAndRun {
                 let task = running.removeValue(forKey: taskKey)!
                 failed(task, with: taskKey)
             }
@@ -328,13 +334,12 @@ open class TaskQueue {
     private func failed(_ task: Task, with taskKey: UUID) {
         var task = task
         switch task.status.state {
-        case .dependency: fallthrough
-        case .currently: task.status.state = .failed(task.status.state)
+        case .dependency, .currently: task.status.state = .failed(task.status.state)
         default:
             fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state. \(task.status.state)")
         }
 
-        _erroredSemaphore.waitAndRun() {
+        _erroredSemaphore.waitAndRun {
             _errored[taskKey] = task
         }
     }
@@ -343,11 +348,10 @@ open class TaskQueue {
     private func startNext() {
         guard active < maxSimultaneous else { return }
 
-        queue.async(qos: .background) {
-            self._waitingSemaphore.waitAndRun() {
-                guard let upNext = self.waiting.first else { return }
-                self.start(upNext)
-            }
+        _waitingSemaphore.waitAndRun {
+            guard let upNext = waiting.first else { return }
+            waiting.removeFirst()
+            start(upNext)
         }
     }
 
@@ -360,11 +364,11 @@ open class TaskQueue {
     - Returns: The UUID used to track the task
     */
     @discardableResult
-    private func start(_ task: Task, autostart: Bool = true) -> UUID {
+    private func start(_ task: Task, autostart: Bool = true, dependent: DependentTask? = nil) -> UUID {
         let group = DispatchGroup()
         let uniqueKey = UUID()
 
-        _groupsSemaphore.waitAndRun() {
+        _groupsSemaphore.waitAndRun {
             _groups[uniqueKey] = group
         }
 
@@ -386,23 +390,32 @@ open class TaskQueue {
             guard self.finish(with: uniqueKey) else { return }
         }
 
-        setupNotify(using: group, with: uniqueKey, autostart)
+        setupNotify(using: group, with: uniqueKey, autostart: autostart, dependent: dependent)
 
         return uniqueKey
     }
 
-    private func setupNotify(using group: DispatchGroup, with uniqueKey: UUID, _ autostart: Bool) {
+    private func setupNotify(using group: DispatchGroup, with uniqueKey: UUID, autostart: Bool, dependent: DependentTask? = nil) {
         group.notify(qos: queue.qos, queue: queue) {
-            self._runningSemaphore.waitAndRun() {
-                let task = self.running.removeValue(forKey: uniqueKey)!
+            self._runningSemaphore.waitAndRun {
+                let task: Task
+                if self.running[uniqueKey] != nil {
+                    task = self.running.removeValue(forKey: uniqueKey)!
+                } else {
+                    task = self._errored[uniqueKey]!
+                }
+
                 task.completionBlock(task.status)
+
+                if let dependent = dependent {
+                    dependent.dependencyCompletionBlock(task)
+                }
             }
-            self._groupsSemaphore.waitAndRun() {
+            self._groupsSemaphore.waitAndRun {
                 self._groups.removeValue(forKey: uniqueKey)
             }
 
-
-            if (autostart) {
+            if autostart {
                 self._getNext = true
             }
         }
@@ -410,7 +423,7 @@ open class TaskQueue {
 
     /// Resumes execution of the running tasks
     public func resume() {
-        _runningSemaphore.waitAndRun() {
+        _runningSemaphore.waitAndRun {
             resumeAllTasks()
         }
 
@@ -423,7 +436,7 @@ open class TaskQueue {
             let task = running[key]
 
             // Look at stopping the dispatch queue/group for other ones (or both)
-            if (task is PausableTask) {
+            if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
                 running[key]!.status.state = .currently(.resuming)
                 guard task.resume() else {
@@ -439,7 +452,7 @@ open class TaskQueue {
 
     /// Pauses (AKA suspends) current execution of the running tasks and does not begin to run any new tasks
     public func pause() {
-        _runningSemaphore.waitAndRun() {
+        _runningSemaphore.waitAndRun {
             pauseAllTasks()
         }
 
@@ -455,7 +468,7 @@ open class TaskQueue {
             let task = running[key]
 
             // Look at stopping the dispatch queue/group for other ones (or both)
-            if (task is PausableTask) {
+            if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
                 running[key]!.status.state = .currently(.pausing)
                 guard task.pause() else {
@@ -480,7 +493,7 @@ open class TaskQueue {
         _isActive = false
 
         var cancelled: [Task] = []
-        _runningSemaphore.waitAndRun() {
+        _runningSemaphore.waitAndRun {
             cancelled = cancelAllTasks()
         }
         return cancelled
@@ -492,7 +505,7 @@ open class TaskQueue {
             var task: Task! = running.removeValue(forKey: key)
 
             // Look at stopping the dispatch queue/group for other ones (or both)
-            if (task is CancellableTask) {
+            if task is CancellableTask {
                 var task: CancellableTask! = task as? CancellableTask
                 task.status.state = .currently(.cancelling)
                 guard task.cancel() else {
@@ -511,7 +524,7 @@ open class TaskQueue {
     public func wait() {
         while !_groups.isEmpty {
             var group: DispatchGroup!
-            _groupsSemaphore.waitAndRun() {
+            _groupsSemaphore.waitAndRun {
                 let (key, g) = _groups.first!
                 _groups.removeValue(forKey: key)
                 group = g
@@ -565,7 +578,7 @@ open class TaskQueue {
         - queue: The queue to which the supplied block is submitted once all of the tasks in this queue finish executing
         - work: The work to be performed on the same dispatch queue as this TaskQueue once all of the tasks in this queue finish executing
     */
-    public func notify(qos: DispatchQoS = .default, flags: DispatchWorkItemFlags = [], queue: DispatchQueue, execute work: @escaping () -> ()) {
+    public func notify(qos: DispatchQoS = .default, flags: DispatchWorkItemFlags = [], queue: DispatchQueue, execute work: @escaping () -> Void) {
         let group = DispatchGroup()
         queue.async(group: group, qos: qos) {
             self.wait()
@@ -578,7 +591,7 @@ open class TaskQueue {
     - Parameter:
         - work: The work to be performed on the same dispatch queue as this TaskQueue once all of the tasks in this queue finish executing
     */
-    public func notify(execute work: @escaping () -> ()) {
+    public func notify(execute work: @escaping () -> Void) {
         notify(qos: queue.qos, queue: queue, execute: work)
     }
     /**

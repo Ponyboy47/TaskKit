@@ -69,6 +69,9 @@ public protocol CancellableTask: Task {
 public protocol DependentTask: Task {
     /// The tasks that must complete successfully before this task can run
     var dependencies: [Task] { get set }
+
+    /// A block that will be executed when each dependency finishes executing
+    var dependencyCompletionBlock: (Task) -> () { get }
 }
 
 public extension DependentTask {
