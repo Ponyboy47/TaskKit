@@ -115,7 +115,7 @@ open class TaskQueue {
         - name: The name of the TaskQueue
         - maxSimultaneous: The maximum number of tasks that can run simultaneously
     */
-    public init(_ name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous) {
+    public init(name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous) {
         self.name = name
         self.maxSimultaneous = maxSimultaneous
 
@@ -123,6 +123,32 @@ open class TaskQueue {
         self.queue = DispatchQueue(label: "com.taskqueue.\(UUID().description)", attributes: .concurrent)
 
         self.queue.suspend()
+    }
+
+    /**
+    Initialize a TaskQueue
+
+    - Parameter:
+        - name: The name of the TaskQueue
+        - maxSimultaneous: The maximum number of tasks that can run simultaneously
+        - tasks: An array of tasks to add to the queue
+    */
+    public convenience init(name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous, tasks: [Task]) {
+        self.init(name: name, maxSimultaneous: maxSimultaneous)
+        self.add(tasks: tasks)
+    }
+
+    /**
+    Initialize a TaskQueue
+
+    - Parameter:
+        - name: The name of the TaskQueue
+        - maxSimultaneous: The maximum number of tasks that can run simultaneously
+        - tasks: An array of tasks to add to the queue
+    */
+    public convenience init(name: String, maxSimultaneous: Int = TaskQueue.defaultMaxSimultaneous, tasks: Task...) {
+        self.init(name: name, maxSimultaneous: maxSimultaneous)
+        self.add(tasks: tasks)
     }
 
     /**

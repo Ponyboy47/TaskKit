@@ -98,9 +98,9 @@ The `DependentTask` is passed as the `Task` in the closure.<br /><br />
 
 After you have at least one type conforming to any of the `Task` protocols, you can create a `TaskQueue` and add tasks to it:
 ```swift
-let queue = TaskQueue("com.example.taskqueue", maxSimultaneous: 1)
+let queue = TaskQueue(name: "com.example.taskqueue", maxSimultaneous: 1, tasks: myTasksArray)
 
-queue.add(task: myTask)
+queue.add(task: myOtherTask)
 
 queue.start()
 ```
