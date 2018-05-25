@@ -14,6 +14,11 @@ open class TaskQueue {
     /// A semaphore to use for preventing simultaneous access to the waiting array
     private var _waitingSemaphore = DispatchSemaphore(value: 1)
 
+    /// The tasks that are currently beginning
+    private var _beginning: [UUID: Task] = [:]
+    /// A semaphore to use for preventing simultaneous access to the beginning array
+    private var _beginningSemaphore = DispatchSemaphore(value: 1)
+
     /// The tasks that are currently running
     public private(set) var running: [UUID: Task] = [:]
     /// A semaphore to use for preventing simultaneous access to the running array
@@ -44,11 +49,13 @@ open class TaskQueue {
         return _dependents.reduce(0, { return $0 + $1.dependencies.count })
     }
 
+    /// The number of tasks that are currently running or beginning
+    private var _active: Int { return active + _beginning.count }
     /// The number of tasks that are currently running
     public var active: Int { return running.count }
     /// The total number of tasks left (including the currently running tasks)
     public var count: Int {
-        return waiting.count + _dependencies + active
+        return waiting.count + _dependencies + _active
     }
     /// Whether or not there are any tasks still executing or waiting to be executed
     public var isEmpty: Bool {
@@ -58,7 +65,7 @@ open class TaskQueue {
     /// Tracks whether the DispatchQueue is currently running or if it is suspended
     private var _isActive: Bool = false
     /// Whether or not the queue is currently running any tasks
-    public var isRunning: Bool { return _isActive && active > 0 }
+    public var isRunning: Bool { return _isActive && _active > 0 }
 
     /// The maximum number of tasks that can run simultaneously
     public var maxSimultaneous: Int
@@ -89,8 +96,8 @@ open class TaskQueue {
                 }
 
                 _getNextSemaphore.signal()
-            } else if active < maxSimultaneous {
-                _getNext = true
+            } else if _active < maxSimultaneous {
+                self._getNext = true
             }
         }
     }
@@ -128,7 +135,7 @@ open class TaskQueue {
             waiting.append(task)
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
-        if _isActive && !_getNext && active < maxSimultaneous {
+        if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
                 self._getNext = true
             }
@@ -145,7 +152,7 @@ open class TaskQueue {
             waiting += tasks
             waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
         }
-        if _isActive && !_getNext && active < maxSimultaneous {
+        if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
                 self._getNext = true
             }
@@ -284,9 +291,13 @@ open class TaskQueue {
     */
     private func execute(_ task: Task, with taskKey: UUID) -> Bool {
         _runningSemaphore.waitAndRun {
+            _beginningSemaphore.waitAndRun {
+                _beginning.removeValue(forKey: taskKey)
+            }
             running[taskKey] = task
             running[taskKey]!.status.state = .running
         }
+        print("Running \(_active) tasks")
 
         guard running[taskKey]!.execute() else {
             _runningSemaphore.waitAndRun {
@@ -346,7 +357,7 @@ open class TaskQueue {
 
     /// Begins execution of the next task in the waiting list
     private func startNext() {
-        guard active < maxSimultaneous else { return }
+        guard _active < maxSimultaneous else { return }
 
         _waitingSemaphore.waitAndRun {
             guard let upNext = waiting.first else { return }
@@ -370,6 +381,10 @@ open class TaskQueue {
 
         _groupsSemaphore.waitAndRun {
             _groups[uniqueKey] = group
+        }
+
+        _beginningSemaphore.waitAndRun {
+            _beginning[uniqueKey] = task
         }
 
         queue.async(group: group, qos: task.qos) {
