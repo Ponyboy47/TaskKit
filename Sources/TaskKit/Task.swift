@@ -3,13 +3,14 @@ import Dispatch
 public protocol Task {
     /// The current execution status of the task
     var status: TaskStatus { get set }
+    /// The current execution state of the task
+    var state: TaskState { get }
     /// How important is it that this task be run sooner rather than later (Tasks with higher priority are executed first)
-    /// The default implementation uses the minimal priority.
     var priority: TaskPriority { get }
     /// The Dispatch Quality of Service the task should use to execute
     var qos: DispatchQoS { get }
     /// A block to execute once the task finishes
-    var completionBlock: (TaskStatus) -> () { get }
+    var completionBlock: (TaskStatus) -> Void { get }
 
     /**
     The code that will be ran when your task is performed
@@ -18,16 +19,11 @@ public protocol Task {
     */
     func execute() -> Bool
     func main() -> Bool
-
-    /**
-    This is run after the task completes its execution. Any clean up code should go here
-
-    - Returns: Whether or not the task cleaned up properly
-    */
-    func finish() -> Bool
 }
 
 public extension Task {
+    public var state: TaskState { return status.state }
+
     @available(*, renamed: "execute")
     public func main() -> Bool { return execute() }
 }
@@ -71,7 +67,7 @@ public protocol DependentTask: Task {
     var dependencies: [Task] { get set }
 
     /// A block that will be executed when each dependency finishes executing
-    var dependencyCompletionBlock: (Task) -> () { get }
+    var dependencyCompletionBlock: (Task) -> Void { get }
 }
 
 public extension DependentTask {

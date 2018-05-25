@@ -90,7 +90,7 @@ open class TaskQueue {
 
                 _getNextSemaphore.signal()
             } else if active < maxSimultaneous {
-                _getNext = true
+                self._getNext = true
             }
         }
     }
@@ -302,29 +302,6 @@ open class TaskQueue {
     }
 
     /**
-    Finishes running the task (post execution clean up)
-
-    - Parameter taskKey: The unique key used to track the task
-
-    - Returns: Whether or not the task was finished successfully
-    */
-    private func finish(with taskKey: UUID) -> Bool {
-        _runningSemaphore.waitAndRun {
-            running[taskKey]!.status.state = .currently(.finishing)
-        }
-
-        guard running[taskKey]!.finish() else {
-            _runningSemaphore.waitAndRun {
-                let task = running.removeValue(forKey: taskKey)!
-                failed(task, with: taskKey)
-            }
-            return false
-        }
-
-        return true
-    }
-
-    /**
     Called when the task failed at some stage
     Sets the task to the failed state and places it in the errored dict
 
@@ -387,7 +364,6 @@ open class TaskQueue {
             }
 
             guard self.execute(_task!, with: uniqueKey) else { return }
-            guard self.finish(with: uniqueKey) else { return }
         }
 
         setupNotify(using: group, with: uniqueKey, autostart: autostart, dependent: dependent)
