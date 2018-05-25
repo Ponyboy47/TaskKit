@@ -12,7 +12,7 @@ protocol oriented than the Standard Library counterpart.
 ## Installation (SPM)
 Add this to your Package.swift
 ```swift
-.package(url: https://github.com/Ponyboy47/TaskKit.git", from: "0.3.1")
+.package(url: https://github.com/Ponyboy47/TaskKit.git", from: "0.3.2")
 ```
 
 ## Usage
@@ -21,7 +21,7 @@ The basis of TaskKit is (you guessed it) Tasks.
 There are a number of Task protocols you can opt to conform to:
 ### Task
 This is the base protocol and source of the basic Task functionality.
-These are the variables/functions you must implement to conform to the Task protocol:
+These are the variables/functions you must implement to conform to any of the Task protocols:
 
 ```swift
 var status: TaskStatus { get set }
@@ -90,6 +90,17 @@ An array of the tasks that must execute successfully before this task can begin 
 var dependencyCompletionBlock: (Task) -> Void { get }
 ```
 A closure that is ran whenever a dependency finishes executing. The DependentTask is passed as the Task in the closure
+
+## Basic Usage
+
+After you have at least one type conforming to any of the Task protocols, you can create yourself a TaskQueue and add tasks to it:
+```swift
+let queue = TaskQueue("com.example.taskqueue", maxSimultaneous: 1)
+
+queue.add(task: myTask)
+
+queue.start()
+```
 
 ## License
 MIT

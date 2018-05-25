@@ -4,7 +4,7 @@ public protocol Task {
     /// The current execution status of the task
     var status: TaskStatus { get set }
     /// The current execution state of the task
-    var state: TaskState { get }
+    var state: TaskState { get set }
     /// How important is it that this task be run sooner rather than later (Tasks with higher priority are executed first)
     var priority: TaskPriority { get }
     /// The Dispatch Quality of Service the task should use to execute
@@ -22,7 +22,10 @@ public protocol Task {
 }
 
 public extension Task {
-    public var state: TaskState { return status.state }
+    public var state: TaskState {
+        get { return status.state }
+        set { status.state = newValue }
+    }
 
     @available(*, renamed: "execute")
     public func main() -> Bool { return execute() }

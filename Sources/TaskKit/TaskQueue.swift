@@ -220,7 +220,8 @@ open class TaskQueue {
     - Returns: The task, if it was configured properly, or nil otherwise
     */
     private func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
-        var task = task
+        guard var task = prepare(task as Task, with: taskKey) as? DependentTask else { return nil }
+        task.state = .currently(.preparing)
 
         var dependency: Task? = nil
         while !task.dependencies.isEmpty {
@@ -234,11 +235,13 @@ open class TaskQueue {
         }
 
         guard task.dependencies.isEmpty && dependency == nil else {
-            task.status.state = .dependency(dependency!)
+            task.state = .dependency(dependency!)
             failed(task, with: taskKey)
             return nil
         }
-        return prepare(task as Task, with: taskKey)
+
+        task.state = .done(.preparing)
+        return task
     }
 
     /**
@@ -250,13 +253,14 @@ open class TaskQueue {
     - Returns: The task, if it was configured properly, or nil otherwise
     */
     private func prepare(_ task: Task, with taskKey: UUID) -> Task? {
-        switch task.status.state {
-        case .ready:
-            task.status.state = .done(.configuring)
+        var task = task
+        switch task.state {
+        case .ready: task.state = .currently(.preparing)
         default:
             failed(task, with: taskKey)
             return nil
         }
+        task.state = .done(.preparing)
 
         return task
     }
@@ -271,20 +275,20 @@ open class TaskQueue {
     */
     private func configure(_ task: ConfigurableTask, with taskKey: UUID) -> Task? {
         var task = task
-        task.status.state = .currently(.configuring)
+        task.state = .currently(.configuring)
         guard task.configure() else {
             failed(task, with: taskKey)
             return nil
         }
 
-        task.status.state = .done(.configuring)
+        task.state = .done(.configuring)
         return task
     }
 
     /**
     Executes the task
 
-    - Parameter task: The task to configure
+    - Parameter task: The task to execute
     - Parameter taskKey: The unique key used to track the task
 
     - Returns: Whether or not the task executed successfully
@@ -295,9 +299,8 @@ open class TaskQueue {
                 _beginning.removeValue(forKey: taskKey)
             }
             running[taskKey] = task
-            running[taskKey]!.status.state = .running
+            running[taskKey]!.state = .running
         }
-        print("Running \(_active) tasks")
 
         guard running[taskKey]!.execute() else {
             _runningSemaphore.waitAndRun {
@@ -308,7 +311,7 @@ open class TaskQueue {
             return false
         }
 
-        running[taskKey]!.status.state = .done(.executing)
+        running[taskKey]!.state = .succeeded
         return true
     }
 
@@ -321,10 +324,11 @@ open class TaskQueue {
     */
     private func failed(_ task: Task, with taskKey: UUID) {
         var task = task
-        switch task.status.state {
-        case .dependency, .currently: task.status.state = .failed(task.status.state)
+        let state = task.state
+        switch state {
+        case .dependency, .currently: task.state = .failed(state)
         default:
-            fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state. \(task.status.state)")
+            fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state. \(state)")
         }
 
         _erroredSemaphore.waitAndRun {
@@ -429,14 +433,14 @@ open class TaskQueue {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
-                running[key]!.status.state = .currently(.resuming)
+                running[key]!.state = .currently(.resuming)
                 guard task.resume() else {
                     let fail: Task! = running.removeValue(forKey: key)
                     failed(fail, with: key)
                     _getNext = true
                     continue
                 }
-                running[key]!.status.state = .currently(.executing)
+                running[key]!.state = .running
             }
         }
     }
@@ -461,13 +465,13 @@ open class TaskQueue {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
-                running[key]!.status.state = .currently(.pausing)
+                running[key]!.state = .currently(.pausing)
                 guard task.pause() else {
                     let fail: Task! = running.removeValue(forKey: key)
                     failed(fail, with: key)
                     continue
                 }
-                running[key]!.status.state = .paused
+                running[key]!.state = .paused
             }
         }
     }
@@ -498,13 +502,13 @@ open class TaskQueue {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is CancellableTask {
                 var task: CancellableTask! = task as? CancellableTask
-                task.status.state = .currently(.cancelling)
+                task.state = .currently(.cancelling)
                 guard task.cancel() else {
                     failed(task, with: key)
                     continue
                 }
             }
-            task.status.state = .cancelled
+            task.state = .cancelled
             cancelled.append(task)
         }
 
