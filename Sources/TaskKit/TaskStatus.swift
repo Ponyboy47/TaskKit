@@ -1,4 +1,7 @@
+import Foundation
+
 public class TaskStatus {
+    let id: UUID = UUID()
     /// The current state of the task
     public internal(set) var state: TaskState
     /// An array of log messages from the task's execution

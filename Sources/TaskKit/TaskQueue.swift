@@ -5,7 +5,7 @@ import Dispatch
 // swiftlint:disable file_length
 // swiftlint:disable type_body_length
 
-open class TaskQueue {
+open class TaskQueue: Equatable {
     /// The name of the TaskQueue
     public private(set) var name: String
 
@@ -32,7 +32,7 @@ open class TaskQueue {
     private var _erroredSemaphore = DispatchSemaphore(value: 1)
 
     /// The waiting tasks that may have _dependencies
-    private var _dependents: [DependentTask] {
+    var _dependents: [DependentTask] {
         let _dependents = waiting.compactMap {
             return $0 as? DependentTask
         }
@@ -79,7 +79,7 @@ open class TaskQueue {
 
     /// When set to true, will grab the next task and begin executing it
     private var __getNext: Bool = false
-    private var _getNext: Bool {
+    var _getNext: Bool {
         get { return __getNext }
         set {
             if newValue {
@@ -152,6 +152,15 @@ open class TaskQueue {
     }
 
     /**
+    Sorts the array of Tasks by priority
+
+    - Parameter array: The array of tasks to sort in execution order
+    */
+    class func sort(_ array: inout [Task]) {
+        array.sort { $0.priority > $1.priority }
+    }
+
+    /**
     Adds a task to the task array, then sorts the task array based on its tasks' priorities
 
     - Parameter task: The task to add
@@ -159,7 +168,7 @@ open class TaskQueue {
     public func addTask(_ task: Task) {
         _waitingSemaphore.waitAndRun {
             waiting.append(task)
-            waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
+            TaskQueue.sort(&waiting)
         }
         if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
@@ -176,7 +185,7 @@ open class TaskQueue {
     public func addTasks(_ tasks: [Task]) {
         _waitingSemaphore.waitAndRun {
             waiting += tasks
-            waiting.sort(by: { $0.priority.rawValue > $1.priority.rawValue })
+            TaskQueue.sort(&waiting)
         }
         if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
@@ -245,22 +254,20 @@ open class TaskQueue {
 
     - Returns: The task, if it was configured properly, or nil otherwise
     */
-    private func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
-        guard var task = prepare(task as Task, with: taskKey) as? DependentTask else { return nil }
+    func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
+        guard prepare(task as Task, with: taskKey) as? DependentTask != nil else { return nil }
         task.state = .currently(.preparing)
 
         var dependency: Task? = nil
-        while !task.dependencies.isEmpty {
-            let dep = task.dependencies.removeFirst()
-
-            let depKey = start(dep, autostart: false, dependent: task)
+        while !task.waiting.isEmpty {
+            let depKey = start(task.waiting.first!, autostart: false, dependent: task)
             _groups[depKey]!.wait()
 
             dependency = _errored[depKey]
             guard dependency == nil else { break }
         }
 
-        guard task.dependencies.isEmpty && dependency == nil else {
+        guard dependency == nil else {
             task.state = .dependency(dependency!)
             failed(task, with: taskKey)
             return nil
@@ -278,8 +285,7 @@ open class TaskQueue {
 
     - Returns: The task, if it was configured properly, or nil otherwise
     */
-    private func prepare(_ task: Task, with taskKey: UUID) -> Task? {
-        var task = task
+    func prepare(_ task: Task, with taskKey: UUID) -> Task? {
         switch task.state {
         case .ready: task.state = .currently(.preparing)
         default:
@@ -300,7 +306,6 @@ open class TaskQueue {
     - Returns: The task, if it was configured properly, or nil otherwise
     */
     private func configure(_ task: ConfigurableTask, with taskKey: UUID) -> Task? {
-        var task = task
         task.state = .currently(.configuring)
         guard task.configure() else {
             failed(task, with: taskKey)
@@ -348,11 +353,11 @@ open class TaskQueue {
     - Parameter task: The task to configure
     - Parameter taskKey: The unique key used to track the task
     */
-    private func failed(_ task: Task, with taskKey: UUID) {
-        var task = task
+    func failed(_ task: Task, with taskKey: UUID) {
         let state = task.state
         switch state {
-        case .dependency, .currently: task.state = .failed(state)
+        case .dependency: task.state = .failed(state)
+        case .currently(let current): task.state = .failed(current)
         default:
             fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state. \(state)")
         }
@@ -422,9 +427,9 @@ open class TaskQueue {
                 let task: Task
                 if self.running[uniqueKey] != nil {
                     task = self.running.removeValue(forKey: uniqueKey)!
-                } else {
+                } else if self._errored[uniqueKey] != nil {
                     task = self._errored[uniqueKey]!
-                }
+                } else { return }
 
                 task.completionBlock(task.status)
 
@@ -523,11 +528,11 @@ open class TaskQueue {
     private func cancelAllTasks() -> [Task] {
         var cancelled: [Task] = []
         for (key, _) in running {
-            var task: Task! = running.removeValue(forKey: key)
+            let task: Task! = running.removeValue(forKey: key)
 
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is CancellableTask {
-                var task: CancellableTask! = task as? CancellableTask
+                let task: CancellableTask! = task as? CancellableTask
                 task.state = .currently(.cancelling)
                 guard task.cancel() else {
                     failed(task, with: key)
@@ -637,5 +642,9 @@ open class TaskQueue {
     */
     public func notify(work: DispatchWorkItem) {
         notify(queue: queue, work: work)
+    }
+
+    public static func == (lhs: TaskQueue, rhs: TaskQueue) -> Bool {
+        return lhs.queue.label == rhs.queue.label && lhs.name == rhs.name
     }
 }

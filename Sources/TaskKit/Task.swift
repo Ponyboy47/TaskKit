@@ -1,12 +1,11 @@
 import Dispatch
+import Foundation
 
-public protocol Task {
+public protocol Task: class {
     /// The current execution status of the task
-    var status: TaskStatus { get set }
-    /// The current execution state of the task
-    var state: TaskState { get set }
+    var status: TaskStatus { get }
     /// How important is it that this task be run sooner rather than later (Tasks with higher priority are executed first)
-    var priority: TaskPriority { get }
+    var priority: TaskPriority { get set }
     /// The Dispatch Quality of Service the task should use to execute
     var qos: DispatchQoS { get }
     /// A block to execute once the task finishes
@@ -22,9 +21,46 @@ public protocol Task {
 }
 
 public extension Task {
+    public var id: UUID { return status.id }
     public var state: TaskState {
         get { return status.state }
         set { status.state = newValue }
+    }
+
+    /**
+    Appends a new log message to the status
+
+    - Parameter message: The message to add
+    */
+    public func append(_ message: String) {
+        status.append(message)
+    }
+
+    /**
+    Splits the message based on a delimeter and appends the array of messages to the messages array
+
+    - Parameter message: The message to split and add
+    */
+    public func append(_ message: String, separatedBy delimeter: String) {
+        status.append(message, separatedBy: delimeter)
+    }
+
+    /**
+    Appends an array of messages to the messages array
+
+    - Parameter message: The messages to add
+    */
+    public func append(_ messages: [String]) {
+        status.append(messages)
+    }
+
+    /**
+    Appends a variadic of messages to the messages array
+
+    - Parameter message: The messages to add
+    */
+    public func append(_ messages: String...) {
+        status.append(messages)
     }
 
     @available(*, renamed: "execute")
@@ -37,7 +73,7 @@ public protocol ConfigurableTask: Task {
 
     - Returns: Whether or not the task was configured properly
     */
-    mutating func configure() -> Bool
+    func configure() -> Bool
 }
 
 public protocol PausableTask: Task {
@@ -74,11 +110,31 @@ public protocol DependentTask: Task {
 }
 
 public extension DependentTask {
-    public mutating func addDependency(_ task: Task) {
+    public func addDependency(_ task: Task) {
         dependencies.append(task)
     }
 
-    public mutating func add(dependency task: Task) {
+    public func add(dependency task: Task) {
         dependencies.append(task)
+    }
+
+    public var waiting: [Task] {
+        return dependencies.compactMap { task in
+            switch task.state {
+            case .done(.executing): return nil
+            default: return task
+            }
+        }
+    }
+}
+
+public struct DependentTaskOption: OptionSet {
+    public let rawValue: UInt8
+
+    public static let increaseDependencyPriority = DependentTaskOption(rawValue: 1 << 0)
+    public static let decreaseDependentTaskPriority = DependentTaskOption(rawValue: 1 << 1)
+
+    public init(rawValue: UInt8) {
+        self.rawValue = rawValue
     }
 }
