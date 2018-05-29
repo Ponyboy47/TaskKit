@@ -3,7 +3,7 @@ import Dispatch
 
 /// A class very similar to a TaskQueue, except this queue makes the assumption that any dependent tasks are added to either this queue or one of the linked queues
 open class LinkedTaskQueue: TaskQueue {
-    public private(set) var linkedQueues: [LinkedTaskQueue] = []
+    public private(set) var linkedQueues: Set<LinkedTaskQueue> = Set()
     private let _linkedQueuesSemaphore = DispatchSemaphore(value: 1)
 
     public var dependentTaskOptions: DependentTaskOption = []
@@ -27,21 +27,30 @@ open class LinkedTaskQueue: TaskQueue {
         self.add(links: queues)
     }
 
+    public convenience init(name: String, maxSimultaneous: Int = LinkedTaskQueue.defaultMaxSimultaneous, linkedTo queues: Set<LinkedTaskQueue>, options: DependentTaskOption = []) {
+        self.init(name: name, maxSimultaneous: maxSimultaneous)
+        self.add(links: queues)
+    }
+
     public func addLink(to queue: LinkedTaskQueue) {
         _linkedQueuesSemaphore.waitAndRun {
-            linkedQueues.append(queue)
+            linkedQueues.insert(queue)
         }
         queue.addLink(to: self)
     }
 
     public func addLinks(to queues: [LinkedTaskQueue]) {
         _linkedQueuesSemaphore.waitAndRun {
-            linkedQueues += queues
+            linkedQueues.formUnion(queues)
         }
         queues.forEach { $0.addLink(to: self) }
     }
 
     public func addLinks(to queues: LinkedTaskQueue...) {
+        addLinks(to: queues)
+    }
+
+    public func addLinks(to queues: Set<LinkedTaskQueue>) {
         addLinks(to: queues)
     }
 
@@ -54,6 +63,10 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     public func add(links queues: LinkedTaskQueue...) {
+        addLinks(to: queues)
+    }
+
+    public func add(links queues: Set<LinkedTaskQueue>) {
         addLinks(to: queues)
     }
 
@@ -76,17 +89,17 @@ open class LinkedTaskQueue: TaskQueue {
         case notFound
     }
 
-    private func find(task: Task) -> (DependencyState, Int) {
-        for (index, queue) in linkedQueues.enumerated() {
+    private func find(task: Task) -> (DependencyState, SetIndex<LinkedTaskQueue>?) {
+        for queue in linkedQueues {
             if queue.waiting.first(where: { $0.id == task.id }) != nil {
-                return (.waiting, index)
+                return (.waiting, linkedQueues.index(of: queue))
             } else if queue.running.first(where: { $0.value.id == task.id }) != nil {
-                return (.running, index)
+                return (.running, linkedQueues.index(of: queue))
             } else if queue.errored.first(where: { $0.id == task.id }) != nil {
-                return (.errored, index)
+                return (.errored, linkedQueues.index(of: queue))
             }
         }
-        return (.notFound, -1)
+        return (.notFound, nil)
     }
 
     func reAddDependent(_ task: DependentTask) -> Task? {
@@ -101,7 +114,7 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     override func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
-        guard let task = prepare(task as Task, with: taskKey) as? DependentTask else { return nil }
+        guard prepare(task as Task, with: taskKey) as? DependentTask != nil else { return nil }
         task.state = .currently(.preparing)
 
         guard task.waiting.isEmpty else {
@@ -109,10 +122,11 @@ open class LinkedTaskQueue: TaskQueue {
                 let (depState, queueIndex) = find(task: dep)
                 switch depState {
                 case .waiting:
-                    if dependentTaskOptions.contains(.increaseDependencyPriority) {
-                        linkedQueues[queueIndex].increasePriority(dep)
+                    if dependentTaskOptions.contains(.increaseDependencyPriority), let index = queueIndex {
+                        linkedQueues[index].increasePriority(dep)
                     }
                     if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
+                        task.priority.decrease()
                     }
                 case .errored:
                     task.state = .dependency(dep)

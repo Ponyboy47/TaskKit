@@ -5,9 +5,13 @@ import Dispatch
 // swiftlint:disable file_length
 // swiftlint:disable type_body_length
 
-open class TaskQueue: Equatable {
+open class TaskQueue: Hashable {
     /// The name of the TaskQueue
     public private(set) var name: String
+
+    public var hashValue: Int {
+        return queue.label.hashValue
+    }
 
     /// The tasks that are waiting to be run
     public private(set) var waiting: [Task] = []

@@ -55,6 +55,7 @@ public enum TaskPriority: RawRepresentable, Comparable {
         case .minimal: self = .low
         case .low: self = .medium
         case .medium: self = .high
+        case .high: self = .critical
         case .custom(let value):
             if value < .low {
                 self = .low
@@ -69,14 +70,32 @@ public enum TaskPriority: RawRepresentable, Comparable {
         }
     }
 
+    public mutating func decrease() {
+        switch self {
+        case .low: self = .minimal
+        case .medium: self = .low
+        case .high: self = .medium
+        case .critical: self = .high
+        case .custom(let value):
+            if value > .high {
+                self = .high
+            } else if value > .medium {
+                self = .medium
+            } else if value > .low {
+                self = .low
+            } else {
+                self = .minimal
+            }
+        default: break
+        }
+    }
+
     public static func == (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
         return lhs.rawValue == rhs.rawValue
     }
-
     public static func == (lhs: UInt8, rhs: TaskPriority) -> Bool {
         return lhs == rhs.rawValue
     }
-
     public static func == (lhs: TaskPriority, rhs: UInt8) -> Bool {
         return lhs.rawValue == rhs
     }
@@ -84,19 +103,26 @@ public enum TaskPriority: RawRepresentable, Comparable {
     public static func < (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
         return lhs.rawValue < rhs.rawValue
     }
-
     public static func < (lhs: UInt8, rhs: TaskPriority) -> Bool {
         return lhs < rhs.rawValue
     }
-
     public static func < (lhs: TaskPriority, rhs: UInt8) -> Bool {
         return lhs.rawValue < rhs
+    }
+
+    public static func > (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
+        return lhs.rawValue > rhs.rawValue
+    }
+    public static func > (lhs: UInt8, rhs: TaskPriority) -> Bool {
+        return lhs > rhs.rawValue
+    }
+    public static func > (lhs: TaskPriority, rhs: UInt8) -> Bool {
+        return lhs.rawValue > rhs
     }
 
     public static func += (lhs: inout TaskPriority, rhs: TaskPriority) {
         lhs.rawValue += rhs.rawValue
     }
-
     public static func += (lhs: inout TaskPriority, rhs: UInt8) {
         lhs.rawValue += rhs
     }
