@@ -36,14 +36,22 @@ open class LinkedTaskQueue: TaskQueue {
         _linkedQueuesSemaphore.waitAndRun {
             linkedQueues.insert(queue)
         }
-        queue.addLink(to: self)
+
+        if !queue.linkedQueues.contains(self) {
+            queue.addLink(to: self)
+        }
     }
 
     public func addLinks(to queues: [LinkedTaskQueue]) {
         _linkedQueuesSemaphore.waitAndRun {
             linkedQueues.formUnion(queues)
         }
-        queues.forEach { $0.addLink(to: self) }
+
+        queues.forEach { queue in
+            if !queue.linkedQueues.contains(self) {
+                queue.addLink(to: self)
+            }
+        }
     }
 
     public func addLinks(to queues: LinkedTaskQueue...) {
