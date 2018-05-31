@@ -90,6 +90,40 @@ open class LinkedTaskQueue: TaskQueue {
         }
     }
 
+    /**
+    Adds a task to the task array, then sorts the task array based on its tasks' priorities
+
+    - Parameter task: The task to add
+    */
+    override public func addTask(_ task: Task) {
+        _waitingSemaphore.waitAndRun {
+            waiting.append(task)
+            LinkedTaskQueue.sort(&waiting)
+        }
+        if _isActive && !_getNext && _active < maxSimultaneous {
+            queue.async(qos: .background) {
+                self._getNext = true
+            }
+        }
+    }
+
+    /**
+    Adds an array of tasks to the existing task array, then sorts the task array based on its tasks' priorities
+
+    - Parameter tasks: The tasks to add
+    */
+    override public func addTasks(_ tasks: [Task]) {
+        _waitingSemaphore.waitAndRun {
+            waiting += tasks
+            LinkedTaskQueue.sort(&waiting)
+        }
+        if _isActive && !_getNext && _active < maxSimultaneous {
+            queue.async(qos: .background) {
+                self._getNext = true
+            }
+        }
+    }
+
     private enum DependencyState {
         case waiting
         case running
@@ -108,12 +142,6 @@ open class LinkedTaskQueue: TaskQueue {
             }
         }
         return (.notFound, nil)
-    }
-
-    func reAddDependent(_ task: DependentTask) -> Task? {
-        self._getNext = true
-        self.add(task: task)
-        return nil
     }
 
     func increasePriority(_ task: Task) {
@@ -145,7 +173,10 @@ open class LinkedTaskQueue: TaskQueue {
                 default: break
                 }
             }
-            return reAddDependent(task)
+
+            self._getNext = true
+            self.add(task: task)
+            return nil
         }
 
         return task

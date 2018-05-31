@@ -14,9 +14,9 @@ open class TaskQueue: Hashable {
     }
 
     /// The tasks that are waiting to be run
-    public private(set) var waiting: [Task] = []
+    public internal(set) var waiting: [Task] = []
     /// A semaphore to use for preventing simultaneous access to the waiting array
-    private var _waitingSemaphore = DispatchSemaphore(value: 1)
+    var _waitingSemaphore = DispatchSemaphore(value: 1)
 
     /// The tasks that are currently beginning
     private var _beginning: [UUID: Task] = [:]
@@ -54,7 +54,7 @@ open class TaskQueue: Hashable {
     }
 
     /// The number of tasks that are currently running or beginning
-    private var _active: Int { return active + _beginning.count }
+    var _active: Int { return active + _beginning.count }
     /// The number of tasks that are currently running
     public var active: Int { return running.count }
     /// The total number of tasks left (including the currently running tasks)
@@ -67,7 +67,7 @@ open class TaskQueue: Hashable {
     }
 
     /// Tracks whether the DispatchQueue is currently running or if it is suspended
-    private var _isActive: Bool = false
+    var _isActive: Bool = false
     /// Whether or not the queue is currently running any tasks
     public var isRunning: Bool { return _isActive && _active > 0 }
 
@@ -363,7 +363,7 @@ open class TaskQueue: Hashable {
         case .dependency: task.state = .failed(state)
         case .currently(let current): task.state = .failed(current)
         default:
-            fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and we failed during a supposedly impossible state. \(state)")
+            fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and \(task) failed during a supposedly impossible state. \(state)")
         }
 
         _erroredSemaphore.waitAndRun {
