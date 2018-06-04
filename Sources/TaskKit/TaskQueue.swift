@@ -13,57 +13,88 @@ open class TaskQueue: Hashable {
         return queue.label.hashValue
     }
 
-    /// The tasks that are waiting to be run
-    public internal(set) var waiting: [Task] = []
-    /// A semaphore to use for preventing simultaneous access to the waiting array
-    var _waitingSemaphore = DispatchSemaphore(value: 1)
+    /// The tasks that are/have been executed
+    public internal(set) var tasks: [Task] = []
+    /// A semaphore to use for preventing simultaneous write access to the array
+    var _tasksSemaphore = DispatchSemaphore(value: 1)
 
-    /// The tasks that are currently beginning
-    private var _beginning: [UUID: Task] = [:]
-    /// A semaphore to use for preventing simultaneous access to the beginning array
-    private var _beginningSemaphore = DispatchSemaphore(value: 1)
-
-    /// The tasks that are currently running
-    public private(set) var running: [UUID: Task] = [:]
-    /// A semaphore to use for preventing simultaneous access to the running array
-    private var _runningSemaphore = DispatchSemaphore(value: 1)
-
-    /// The tasks that did not transition safely from one state to the next
-    public var errored: [Task] { return _errored.map { $0.value } }
-    /// Internally used to validate task dependencies completed successfully
-    public private(set) var _errored: [UUID: Task] = [:]
-    /// A semaphore to use for preventing simultaneous access to the _errored array
-    private var _erroredSemaphore = DispatchSemaphore(value: 1)
-
-    /// The waiting tasks that may have _dependencies
-    var _dependents: [DependentTask] {
-        let _dependents = waiting.compactMap {
-            return $0 as? DependentTask
-        }
-        return _dependents.map { dependentTasks(of: $0) }.flatMap { $0 }
-    }
-    private func dependentTasks(of task: DependentTask) -> [DependentTask] {
-        return task.dependencies.compactMap {
-            return $0 as? DependentTask
+    var waiting: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .ready: return true
+            default: return false
+            }
         }
     }
-
-    /// The count of waiting task _dependencies
-    private var _dependencies: Int {
-        return _dependents.reduce(0, { return $0 + $1.dependencies.count })
+    var beginning: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .done(let state), .currently(let state):
+                switch state {
+                    case .beginning, .preparing, .configuring: return true
+                    default: return false
+                }
+            default: return false
+            }
+        }
+    }
+    var running: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .currently(let state):
+                switch state {
+                case .executing, .pausing, .cancelling: return true
+                default: return false
+                }
+            default: return false
+            }
+        }
+    }
+    var failed: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .failed: return true
+            default: return false
+            }
+        }
+    }
+    var succeeded: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .done(.executing): return true
+            default: return false
+            }
+        }
+    }
+    var paused: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .done(.pausing): return true
+            default: return false
+            }
+        }
+    }
+    var cancelled: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .done(.cancelling): return true
+            default: return false
+            }
+        }
     }
 
     /// The number of tasks that are currently running or beginning
-    var _active: Int { return active + _beginning.count }
+    var _active: Int {
+        return running.count + beginning.count
+    }
     /// The number of tasks that are currently running
     public var active: Int { return running.count }
-    /// The total number of tasks left (including the currently running tasks)
-    public var count: Int {
-        return waiting.count + _dependencies + _active
+    /// The total number of tasks left (excluding dependencies)
+    public var remaining: Int {
+        return waiting.count + running.count + beginning.count + paused.count
     }
-    /// Whether or not there are any tasks still executing or waiting to be executed
-    public var isEmpty: Bool {
-        return count == 0
+    public var isDone: Bool {
+        return remaining == 0
     }
 
     /// Tracks whether the DispatchQueue is currently running or if it is suspended
@@ -77,7 +108,7 @@ open class TaskQueue: Hashable {
     /// The underlying DispatchQueue used to run the tasks
     public private(set) var queue: DispatchQueue
     /// The underlying DispatchGroups that tasks are added to when running
-    private var _groups: [UUID: DispatchGroup] = [:]
+    var _groups: [UUID: DispatchGroup] = [:]
     /// A semaphore to use for preventing simultaneous access to the _groups dictionary
     private var _groupsSemaphore = DispatchSemaphore(value: 1)
 
@@ -170,9 +201,11 @@ open class TaskQueue: Hashable {
     - Parameter task: The task to add
     */
     public func addTask(_ task: Task) {
-        _waitingSemaphore.waitAndRun {
-            waiting.append(task)
-            TaskQueue.sort(&waiting)
+        guard tasks.index(where: { $0.id == task.id }) == nil else { return }
+        print("Adding task \(task)")
+        _tasksSemaphore.waitAndRun {
+            tasks.append(task)
+            type(of: self).sort(&tasks)
         }
         if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
@@ -187,9 +220,14 @@ open class TaskQueue: Hashable {
     - Parameter tasks: The tasks to add
     */
     public func addTasks(_ tasks: [Task]) {
-        _waitingSemaphore.waitAndRun {
-            waiting += tasks
-            TaskQueue.sort(&waiting)
+        let new: [Task] = tasks.compactMap { task in
+            guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
+            return task
+        }
+        print("Adding tasks \(new)")
+        _tasksSemaphore.waitAndRun {
+            self.tasks += new
+            type(of: self).sort(&self.tasks)
         }
         if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
@@ -254,50 +292,29 @@ open class TaskQueue: Hashable {
     it is in the ready state
 
     - Parameter task: The task to prepare
-    - Parameter taskKey: The unique key used to track the task
 
     - Returns: The task, if it was configured properly, or nil otherwise
     */
-    func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
-        guard prepare(task as Task, with: taskKey) as? DependentTask != nil else { return nil }
+    func prepare(_ task: DependentTask) -> Task? {
         task.state = .currently(.preparing)
 
         var dependency: Task? = nil
         while !task.waiting.isEmpty {
-            let depKey = start(task.waiting.first!, autostart: false, dependent: task)
-            _groups[depKey]!.wait()
+            let dep = task.waiting.first!
+            start(dep, autostart: false, dependent: task)
+            _groups[dep.id]!.wait()
 
-            dependency = _errored[depKey]
+            dependency = failed.first(where: { $0.id == dep.id })
             guard dependency == nil else { break }
         }
 
         guard dependency == nil else {
             task.state = .dependency(dependency!)
-            failed(task, with: taskKey)
+            failed(task)
             return nil
         }
 
         task.state = .done(.preparing)
-        return task
-    }
-
-    /**
-    Prepares to execute the task by ensuring it is in the ready state
-
-    - Parameter task: The task to prepare
-    - Parameter taskKey: The unique key used to track the task
-
-    - Returns: The task, if it was configured properly, or nil otherwise
-    */
-    func prepare(_ task: Task, with taskKey: UUID) -> Task? {
-        switch task.state {
-        case .ready: task.state = .currently(.preparing)
-        default:
-            failed(task, with: taskKey)
-            return nil
-        }
-        task.state = .done(.preparing)
-
         return task
     }
 
@@ -305,14 +322,13 @@ open class TaskQueue: Hashable {
     Configures the task before executing it
 
     - Parameter task: The task to configure
-    - Parameter taskKey: The unique key used to track the task
 
     - Returns: The task, if it was configured properly, or nil otherwise
     */
-    private func configure(_ task: ConfigurableTask, with taskKey: UUID) -> Task? {
+    private func configure(_ task: ConfigurableTask) -> Task? {
         task.state = .currently(.configuring)
         guard task.configure() else {
-            failed(task, with: taskKey)
+            failed(task)
             return nil
         }
 
@@ -324,29 +340,18 @@ open class TaskQueue: Hashable {
     Executes the task
 
     - Parameter task: The task to execute
-    - Parameter taskKey: The unique key used to track the task
 
     - Returns: Whether or not the task executed successfully
     */
-    private func execute(_ task: Task, with taskKey: UUID) -> Bool {
-        _runningSemaphore.waitAndRun {
-            _beginningSemaphore.waitAndRun {
-                _beginning.removeValue(forKey: taskKey)
-            }
-            running[taskKey] = task
-            running[taskKey]!.state = .running
-        }
+    private func execute(_ task: Task) -> Bool {
+        task.state = .running
 
-        guard running[taskKey]!.execute() else {
-            _runningSemaphore.waitAndRun {
-                let task: Task! = running.removeValue(forKey: taskKey)
-                failed(task, with: taskKey)
-            }
-
+        guard task.execute() else {
+            failed(task)
             return false
         }
 
-        running[taskKey]!.state = .succeeded
+        task.state = .succeeded
         return true
     }
 
@@ -355,9 +360,8 @@ open class TaskQueue: Hashable {
     Sets the task to the failed state and places it in the errored dict
 
     - Parameter task: The task to configure
-    - Parameter taskKey: The unique key used to track the task
     */
-    func failed(_ task: Task, with taskKey: UUID) {
+    func failed(_ task: Task) {
         let state = task.state
         switch state {
         case .dependency: task.state = .failed(state)
@@ -365,21 +369,14 @@ open class TaskQueue: Hashable {
         default:
             fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and \(task) failed during a supposedly impossible state. \(state)")
         }
-
-        _erroredSemaphore.waitAndRun {
-            _errored[taskKey] = task
-        }
     }
 
     /// Begins execution of the next task in the waiting list
-    private func startNext() {
+    func startNext() {
         guard _active < maxSimultaneous else { return }
 
-        _waitingSemaphore.waitAndRun {
-            guard let upNext = waiting.first else { return }
-            waiting.removeFirst()
-            start(upNext)
-        }
+        guard let upNext = waiting.first else { return }
+        start(upNext)
     }
 
     /**
@@ -387,59 +384,49 @@ open class TaskQueue: Hashable {
 
     - Parameter task: The task to start
     - Parameter autostart: Whether or not the current task should automatically start the next task in the waiting array upon completion
-
-    - Returns: The UUID used to track the task
     */
-    @discardableResult
-    private func start(_ task: Task, autostart: Bool = true, dependent: DependentTask? = nil) -> UUID {
+    func start(_ task: Task, autostart: Bool = true, dependent: DependentTask? = nil) {
+        task.state = .currently(.beginning)
         let group = DispatchGroup()
-        let uniqueKey = UUID()
 
         _groupsSemaphore.waitAndRun {
-            _groups[uniqueKey] = group
-        }
-
-        _beginningSemaphore.waitAndRun {
-            _beginning[uniqueKey] = task
+            _groups[task.id] = group
         }
 
         queue.async(group: group, qos: task.qos) {
             var _task: Task?
+            print("Starting task \(task)")
             if task is DependentTask {
-                _task = self.prepare(task as! DependentTask, with: uniqueKey)
+                _task = self.prepare(task as! DependentTask)
             } else {
-                _task = self.prepare(task, with: uniqueKey)
+                _task = task
             }
             guard _task != nil else { return }
 
             if task is ConfigurableTask {
-                _task = self.configure(_task as! ConfigurableTask, with: uniqueKey)
+                _task = self.configure(_task as! ConfigurableTask)
                 guard _task != nil else { return }
             }
 
-            guard self.execute(_task!, with: uniqueKey) else { return }
+            guard self.execute(_task!) else { return }
         }
 
-        setupNotify(using: group, with: uniqueKey, autostart: autostart, dependent: dependent)
-
-        return uniqueKey
+        setupNotify(using: group, uniqueKey: task.id, autostart: autostart, dependent: dependent)
     }
 
-    private func setupNotify(using group: DispatchGroup, with uniqueKey: UUID, autostart: Bool, dependent: DependentTask? = nil) {
+    private func setupNotify(using group: DispatchGroup, uniqueKey: UUID, autostart: Bool, dependent: DependentTask? = nil) {
         group.notify(qos: queue.qos, queue: queue) {
-            self._runningSemaphore.waitAndRun {
-                let task: Task
-                if self.running[uniqueKey] != nil {
-                    task = self.running.removeValue(forKey: uniqueKey)!
-                } else if self._errored[uniqueKey] != nil {
-                    task = self._errored[uniqueKey]!
-                } else { return }
+            let task: Task
+            if let index = self.succeeded.index(where: { $0.id == uniqueKey }) {
+                task = self.succeeded[index]
+            } else if let index = self.failed.index(where: { $0.id == uniqueKey }) {
+                task = self.failed[index]
+            } else { return }
 
-                task.completionBlock(task.status)
+            task.completionBlock(task.status)
 
-                if let dependent = dependent {
-                    dependent.dependencyCompletionBlock(task)
-                }
+            if let dependent = dependent {
+                dependent.dependencyCompletionBlock(task)
             }
             self._groupsSemaphore.waitAndRun {
                 self._groups.removeValue(forKey: uniqueKey)
@@ -453,38 +440,31 @@ open class TaskQueue: Hashable {
 
     /// Resumes execution of the running tasks
     public func resume() {
-        _runningSemaphore.waitAndRun {
-            resumeAllTasks()
-        }
+        resumeAllTasks()
 
         queue.resume()
         _isActive = true
     }
 
     private func resumeAllTasks() {
-        for (key, _) in running {
-            let task = running[key]
-
+        for task in paused {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
-                running[key]!.state = .currently(.resuming)
+                task.state = .currently(.resuming)
                 guard task.resume() else {
-                    let fail: Task! = running.removeValue(forKey: key)
-                    failed(fail, with: key)
+                    failed(task as Task)
                     _getNext = true
                     continue
                 }
-                running[key]!.state = .running
+                task.state = .running
             }
         }
     }
 
     /// Pauses (AKA suspends) current execution of the running tasks and does not begin to run any new tasks
     public func pause() {
-        _runningSemaphore.waitAndRun {
-            pauseAllTasks()
-        }
+        pauseAllTasks()
 
         queue.suspend()
         _isActive = false
@@ -494,19 +474,16 @@ open class TaskQueue: Hashable {
     public func suspend() { pause() }
 
     private func pauseAllTasks() {
-        for (key, _) in running {
-            let task = running[key]
-
+        for task in running {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
-                running[key]!.state = .currently(.pausing)
+                task.state = .currently(.pausing)
                 guard task.pause() else {
-                    let fail: Task! = running.removeValue(forKey: key)
-                    failed(fail, with: key)
+                    failed(task as Task)
                     continue
                 }
-                running[key]!.state = .paused
+                task.state = .paused
             }
         }
     }
@@ -522,24 +499,18 @@ open class TaskQueue: Hashable {
         queue.suspend()
         _isActive = false
 
-        var cancelled: [Task] = []
-        _runningSemaphore.waitAndRun {
-            cancelled = cancelAllTasks()
-        }
-        return cancelled
+        return cancelAllTasks()
     }
 
     private func cancelAllTasks() -> [Task] {
         var cancelled: [Task] = []
-        for (key, _) in running {
-            let task: Task! = running.removeValue(forKey: key)
-
+        for task in running {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is CancellableTask {
                 let task: CancellableTask! = task as? CancellableTask
                 task.state = .currently(.cancelling)
                 guard task.cancel() else {
-                    failed(task, with: key)
+                    failed(task as Task)
                     continue
                 }
             }

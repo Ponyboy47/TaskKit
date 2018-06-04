@@ -8,8 +8,24 @@ open class LinkedTaskQueue: TaskQueue {
 
     public var dependentTaskOptions: DependentTaskOption = []
 
-    override var _dependents: [DependentTask] {
-        return waiting.compactMap { return $0 as? DependentTask }
+    private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
+    private var _waitingForDependencySemaphore = DispatchSemaphore(value: 1)
+
+    override var waiting: [Task] {
+        return tasks.filter {
+            switch $0.state {
+            case .ready, .currently(.waiting): return true
+            default: return false
+            }
+        }
+    }
+    private var _waitedForDependencies: [Task] {
+        return tasks.filter { task in
+            switch task.state {
+            case .done(.waiting): return true
+            default: return false
+            }
+        }
     }
 
     public convenience init(name: String, maxSimultaneous: Int = LinkedTaskQueue.defaultMaxSimultaneous, linkedTo queue: LinkedTaskQueue, options: DependentTaskOption = []) {
@@ -90,44 +106,11 @@ open class LinkedTaskQueue: TaskQueue {
         }
     }
 
-    /**
-    Adds a task to the task array, then sorts the task array based on its tasks' priorities
-
-    - Parameter task: The task to add
-    */
-    override public func addTask(_ task: Task) {
-        _waitingSemaphore.waitAndRun {
-            waiting.append(task)
-            LinkedTaskQueue.sort(&waiting)
-        }
-        if _isActive && !_getNext && _active < maxSimultaneous {
-            queue.async(qos: .background) {
-                self._getNext = true
-            }
-        }
-    }
-
-    /**
-    Adds an array of tasks to the existing task array, then sorts the task array based on its tasks' priorities
-
-    - Parameter tasks: The tasks to add
-    */
-    override public func addTasks(_ tasks: [Task]) {
-        _waitingSemaphore.waitAndRun {
-            waiting += tasks
-            LinkedTaskQueue.sort(&waiting)
-        }
-        if _isActive && !_getNext && _active < maxSimultaneous {
-            queue.async(qos: .background) {
-                self._getNext = true
-            }
-        }
-    }
-
     private enum DependencyState {
         case waiting
+        case beginning
         case running
-        case errored
+        case failed
         case notFound
     }
 
@@ -135,10 +118,12 @@ open class LinkedTaskQueue: TaskQueue {
         for queue in linkedQueues {
             if queue.waiting.first(where: { $0.id == task.id }) != nil {
                 return (.waiting, linkedQueues.index(of: queue))
-            } else if queue.running.first(where: { $0.value.id == task.id }) != nil {
+            } else if queue.beginning.first(where: { $0.id == task.id }) != nil {
+                return (.beginning, linkedQueues.index(of: queue))
+            } else if queue.running.first(where: { $0.id == task.id }) != nil {
                 return (.running, linkedQueues.index(of: queue))
-            } else if queue.errored.first(where: { $0.id == task.id }) != nil {
-                return (.errored, linkedQueues.index(of: queue))
+            } else if queue.failed.first(where: { $0.id == task.id }) != nil {
+                return (.failed, linkedQueues.index(of: queue))
             }
         }
         return (.notFound, nil)
@@ -147,13 +132,14 @@ open class LinkedTaskQueue: TaskQueue {
     func increasePriority(_ task: Task) {
         guard let index = waiting.index(where: { $0.id == task.id }) else { return }
         waiting[index].priority.increase()
+        type(of: self).sort(&tasks)
     }
 
-    override func prepare(_ task: DependentTask, with taskKey: UUID) -> Task? {
-        guard prepare(task as Task, with: taskKey) as? DependentTask != nil else { return nil }
+    override func prepare(_ task: DependentTask) -> Task? {
         task.state = .currently(.preparing)
 
         guard task.waiting.isEmpty else {
+            var groups: [DispatchGroup] = []
             for dep in task.waiting {
                 let (depState, queueIndex) = find(task: dep)
                 switch depState {
@@ -163,22 +149,59 @@ open class LinkedTaskQueue: TaskQueue {
                     }
                     if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
                         task.priority.decrease()
+                        type(of: self).sort(&tasks)
                     }
-                case .errored:
+                case .failed:
                     task.state = .dependency(dep)
-                    failed(task, with: taskKey)
+                    failed(task)
                     return nil
                 case .notFound:
                     fatalError("Could not find dependency task \(dep) in any of the linked queues. Task \(task) will never be able to execute!")
-                default: break
+                default:
+                    guard let index = queueIndex else { break }
+                    guard let group = linkedQueues[index]._groups[dep.id] else { break }
+                    groups.append(group)
                 }
             }
 
+            task.state = .currently(.waiting)
+            _waitingForDependencySemaphore.waitAndRun {
+                _waitingForDependency[task.id] = groups
+            }
             self._getNext = true
-            self.add(task: task)
             return nil
         }
 
         return task
+    }
+
+    /// Begins execution of the next task in the waiting list
+    override func startNext() {
+        guard _active < maxSimultaneous else { return }
+
+        let upNext: Task
+
+        if let waited = _waitedForDependencies.first {
+            upNext = waited
+        } else if let ready = waiting.first {
+            upNext = ready
+        } else { return }
+
+        if let groups = _waitingForDependency[upNext.id] {
+            queue.async(qos: .background) {
+                for group in groups {
+                    group.wait()
+                }
+                upNext.state = .done(.waiting)
+            }
+
+            _waitingForDependencySemaphore.waitAndRun {
+                _waitingForDependency.removeValue(forKey: upNext.id)
+            }
+
+            return
+        }
+
+        start(upNext)
     }
 }
