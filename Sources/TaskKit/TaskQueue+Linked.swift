@@ -200,7 +200,7 @@ open class LinkedTaskQueue: TaskQueue {
             }
 
             return
-        }
+        } else if case .currently(.waiting) = upNext.state { return }
 
         start(upNext)
     }
