@@ -202,7 +202,6 @@ open class TaskQueue: Hashable {
     */
     public func addTask(_ task: Task) {
         guard tasks.index(where: { $0.id == task.id }) == nil else { return }
-        print("Adding task \(task)")
         _tasksSemaphore.waitAndRun {
             tasks.append(task)
             type(of: self).sort(&tasks)
@@ -224,7 +223,6 @@ open class TaskQueue: Hashable {
             guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
             return task
         }
-        print("Adding tasks \(new)")
         _tasksSemaphore.waitAndRun {
             self.tasks += new
             type(of: self).sort(&self.tasks)
@@ -395,7 +393,6 @@ open class TaskQueue: Hashable {
 
         queue.async(group: group, qos: task.qos) {
             var _task: Task?
-            print("Starting task \(task)")
             if task is DependentTask {
                 _task = self.prepare(task as! DependentTask)
             } else {
