@@ -7,7 +7,7 @@ So I built this! I tried to make it equally thread-safe with similar APIs, but m
 ## Installation (SPM)
 Add this to your Package.swift
 ```swift
-.package(url: "https://github.com/Ponyboy47/TaskKit.git", from: "0.3.3")
+.package(url: "https://github.com/Ponyboy47/TaskKit.git", from: "0.4.0")
 ```
 
 ## The Task Protocols
@@ -98,12 +98,54 @@ The `DependentTask` is passed as the `Task` in the closure.<br /><br />
 
 After you have at least one type conforming to any of the `Task` protocols, you can create a `TaskQueue` and add tasks to it:
 ```swift
-let queue = TaskQueue(name: "com.example.taskqueue", maxSimultaneous: 1, tasks: myTasksArray)
+// Create a queue (maxSimultaneous defaults to 1)
+let queue = TaskQueue(name: "com.example.taskqueue", maxSimultaneous: 2)
 
-queue.add(task: myOtherTask)
+// Add a task to the queue
+queue.add(task: myTask)
 
+// Start the queue's execution
 queue.start()
 ```
+
+If you have a task with dependencies, then you don't need to add the dependencies to the task.
+They'll automatically be ran before the task that they depend on is run.
+```swift
+// Add a dependency to your task
+myTask.add(dependency: dependencyTask)
+
+// Add the base task to the queue
+queue.add(task: myTask)
+
+// Start the queue
+queue.start
+```
+
+## Linked Queues
+
+Sometimes, you might want to separate tasks into different queues even when the tasks in the separate queues may depend on each other.
+This is where you may use a LinkedTaskQueue instead.
+```swift
+// Let's start with two queues:
+// 1. For moving media files
+// 2. For converting the media
+let moveQueue = LinkedTaskQueue(name: "com.example.linked.move", maxSimultaneous: 5)
+let conversionQueue = LinkedTaskQueue(name: "com.example.linked.conversion", linkedTo: moveQueue)
+
+// Add our move tasks
+moveQueue.add(tasks: moveTasks)
+
+// One of the move tasks shouldn't happen until after it has been converted
+moveTasks[0].add(dependency: conversionTask)
+
+// Add that conversion task to its queue
+conversionQueue.add(task: conversionTask)
+
+// Start both the queues
+moveQueue.start()
+conversionQueue.start()
+```
+NOTE: Any dependency tasks must exist in one of the linked queues or there will be a fatal error
 
 ## License
 MIT
