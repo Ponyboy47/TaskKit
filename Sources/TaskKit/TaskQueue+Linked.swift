@@ -11,6 +11,10 @@ open class LinkedTaskQueue: TaskQueue {
     private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
     private var _waitingForDependencySemaphore = DispatchSemaphore(value: 1)
 
+    override var _active: Int {
+        return super._active + _waitingForDependency.count
+    }
+
     override var waiting: [Task] {
         return tasks.filter {
             switch $0.state {
@@ -193,6 +197,7 @@ open class LinkedTaskQueue: TaskQueue {
                     group.wait()
                 }
                 upNext.state = .done(.waiting)
+                self._getNext = true
             }
 
             _waitingForDependencySemaphore.waitAndRun {

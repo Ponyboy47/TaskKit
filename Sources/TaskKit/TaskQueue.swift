@@ -393,15 +393,15 @@ open class TaskQueue: Hashable {
 
         queue.async(group: group, qos: task.qos) {
             var _task: Task?
-            if task is DependentTask {
-                _task = self.prepare(task as! DependentTask)
+            if let task = task as? DependentTask {
+                _task = self.prepare(task)
             } else {
                 _task = task
             }
             guard _task != nil else { return }
 
-            if task is ConfigurableTask {
-                _task = self.configure(_task as! ConfigurableTask)
+            if let task = _task as? ConfigurableTask {
+                _task = self.configure(task)
                 guard _task != nil else { return }
             }
 
