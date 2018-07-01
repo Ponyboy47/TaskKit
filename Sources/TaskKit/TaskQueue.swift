@@ -373,8 +373,10 @@ open class TaskQueue: Hashable {
     func startNext() {
         guard _active < maxSimultaneous else { return }
 
-        guard let upNext = waiting.first else { return }
-        start(upNext)
+        _tasksSemaphore.waitAndRun {
+            guard let upNext = waiting.first else { return }
+            start(upNext)
+        }
     }
 
     /**

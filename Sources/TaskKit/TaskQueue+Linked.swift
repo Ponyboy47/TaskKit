@@ -183,30 +183,32 @@ open class LinkedTaskQueue: TaskQueue {
     override func startNext() {
         guard _active < maxSimultaneous else { return }
 
-        let upNext: Task
+        _tasksSemaphore.waitAndRun {
+            let upNext: Task
 
-        if let waited = _waitedForDependencies.first {
-            upNext = waited
-        } else if let ready = waiting.first {
-            upNext = ready
-        } else { return }
+            if let waited = _waitedForDependencies.first {
+                upNext = waited
+            } else if let ready = waiting.first {
+                upNext = ready
+            } else { return }
 
-        if let groups = _waitingForDependency[upNext.id] {
-            queue.async(qos: .background) {
-                for group in groups {
-                    group.wait()
+            if let groups = _waitingForDependency[upNext.id] {
+                queue.async(qos: .background) {
+                    for group in groups {
+                        group.wait()
+                    }
+                    upNext.state = .done(.waiting)
+                    self._getNext = true
                 }
-                upNext.state = .done(.waiting)
-                self._getNext = true
-            }
 
-            _waitingForDependencySemaphore.waitAndRun {
-                _waitingForDependency.removeValue(forKey: upNext.id)
-            }
+                _waitingForDependencySemaphore.waitAndRun {
+                    _waitingForDependency.removeValue(forKey: upNext.id)
+                }
 
-            return
-        } else if case .currently(.waiting) = upNext.state { return }
+                return
+            } else if case .currently(.waiting) = upNext.state { return }
 
-        start(upNext)
+            start(upNext)
+        }
     }
 }
