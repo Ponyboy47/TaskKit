@@ -192,21 +192,21 @@ open class LinkedTaskQueue: TaskQueue {
                 upNext = ready
             } else { return }
 
-            if let groups = _waitingForDependency[upNext.id] {
-                queue.async(qos: .background) {
-                    for group in groups {
-                        group.wait()
+            _waitingForDependencySemaphore.waitAndRun {
+                if let groups = _waitingForDependency[upNext.id] {
+                    queue.async(qos: .background) {
+                        for group in groups {
+                            group.wait()
+                        }
+                        upNext.state = .done(.waiting)
+                        self._getNext = true
                     }
-                    upNext.state = .done(.waiting)
-                    self._getNext = true
-                }
 
-                _waitingForDependencySemaphore.waitAndRun {
                     _waitingForDependency.removeValue(forKey: upNext.id)
-                }
 
-                return
-            } else if case .currently(.waiting) = upNext.state { return }
+                    return
+                } else if case .currently(.waiting) = upNext.state { return }
+            }
 
             start(upNext)
         }
