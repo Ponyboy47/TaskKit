@@ -11,11 +11,7 @@ open class LinkedTaskQueue: TaskQueue {
     private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
     private var _waitingForDependencySemaphore = DispatchSemaphore(value: 1)
 
-    override var _active: Int {
-        return super._active + _waitingForDependency.count
-    }
-
-    override var waiting: [Task] {
+    override public var waiting: [Task] {
         return tasks.filter {
             switch $0.state {
             case .ready, .currently(.waiting): return true
@@ -28,6 +24,43 @@ open class LinkedTaskQueue: TaskQueue {
             switch task.state {
             case .done(.waiting): return true
             default: return false
+            }
+        }
+    }
+
+    override var _active: Int {
+        return tasks.reduce(0) {
+            switch $1.state {
+            case .currently(let state):
+                switch state {
+                case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
+                default: return $0
+                }
+            case .done(let state):
+                switch state {
+                case .waiting, .beginning, .preparing, .configuring: return $0 + 1
+                default: return $0
+                }
+            default: return $0
+            }
+        }
+    }
+    /// The total number of tasks left (excluding dependencies)
+    override public var remaining: Int {
+        return tasks.reduce(0) {
+            switch $1.state {
+            case .ready: return $0 + 1
+            case .currently(let state):
+                switch state {
+                case .waiting, .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
+                default: return $0
+                }
+            case .done(let state):
+                switch state {
+                case .waiting, .beginning, .preparing, .configuring, .pausing: return $0 + 1
+                default: return $0
+                }
+            default: return $0
             }
         }
     }
@@ -104,9 +137,9 @@ open class LinkedTaskQueue: TaskQueue {
             guard $0.priority == $1.priority else { return false }
             guard $0 is DependentTask else { return true }
             guard $1 is DependentTask else {
-                return ($0 as! DependentTask).waiting.count == 0
+                return ($0 as! DependentTask).incompleteDependencies.isEmpty
             }
-            return ($0 as! DependentTask).waiting.count < ($1 as! DependentTask).waiting.count
+            return ($0 as! DependentTask).incompleteDependencies.count < ($1 as! DependentTask).incompleteDependencies.count
         }
     }
 
@@ -124,15 +157,14 @@ open class LinkedTaskQueue: TaskQueue {
     override func prepare(_ task: DependentTask) -> Task? {
         task.state = .currently(.preparing)
 
-        guard task.waiting.isEmpty else {
+        guard task.incompleteDependencies.isEmpty else {
             var groups: [DispatchGroup] = []
-            for dep in task.waiting {
+            for dep in task.incompleteDependencies {
                 switch dep.state {
                 case .failed, .done(.cancelling), .currently(.cancelling):
                     task.state = .dependency(dep)
                     failed(task)
                     return nil
-                case .done(.executing): continue
                 default:
                     var changed = !dependentTaskOptions.isEmpty
                     if dependentTaskOptions.contains(.increaseDependencyPriority) {

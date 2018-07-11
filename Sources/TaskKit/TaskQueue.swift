@@ -18,7 +18,7 @@ open class TaskQueue: Hashable {
     /// A semaphore to use for preventing simultaneous write access to the array
     var _tasksSemaphore = DispatchSemaphore(value: 1)
 
-    var waiting: [Task] {
+    public var waiting: [Task] {
         return tasks.filter {
             switch $0.state {
             case .ready: return true
@@ -34,7 +34,7 @@ open class TaskQueue: Hashable {
             }
         })
     }
-    var beginning: [Task] {
+    public var beginning: [Task] {
         return tasks.filter {
             switch $0.state {
             case .done(let state), .currently(let state):
@@ -46,7 +46,7 @@ open class TaskQueue: Hashable {
             }
         }
     }
-    var running: [Task] {
+    public var running: [Task] {
         return tasks.filter {
             switch $0.state {
             case .currently(let state):
@@ -58,7 +58,7 @@ open class TaskQueue: Hashable {
             }
         }
     }
-    var failed: [Task] {
+    public var failed: [Task] {
         return tasks.filter {
             switch $0.state {
             case .failed: return true
@@ -66,7 +66,7 @@ open class TaskQueue: Hashable {
             }
         }
     }
-    var succeeded: [Task] {
+    public var succeeded: [Task] {
         return tasks.filter {
             switch $0.state {
             case .done(.executing): return true
@@ -74,7 +74,7 @@ open class TaskQueue: Hashable {
             }
         }
     }
-    var paused: [Task] {
+    public var paused: [Task] {
         return tasks.filter {
             switch $0.state {
             case .done(.pausing): return true
@@ -82,7 +82,7 @@ open class TaskQueue: Hashable {
             }
         }
     }
-    var cancelled: [Task] {
+    public var cancelled: [Task] {
         return tasks.filter {
             switch $0.state {
             case .done(.cancelling): return true
@@ -130,7 +130,7 @@ open class TaskQueue: Hashable {
     public var remaining: Int {
         return tasks.reduce(0) {
             switch $1.state {
-            case .waiting: return $0 + 1
+            case .ready: return $0 + 1
             case .currently(let state):
                 switch state {
                 case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
