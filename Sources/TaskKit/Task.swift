@@ -126,6 +126,14 @@ public extension DependentTask {
             }
         }
     }
+    var upNext: Task? {
+        return dependencies.first(where: { task in
+            switch task.state {
+            case .done(.executing): return false
+            default: return true
+            }
+        })
+    }
 }
 
 public struct DependentTaskOption: OptionSet {

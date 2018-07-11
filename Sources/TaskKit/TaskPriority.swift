@@ -50,7 +50,8 @@ public enum TaskPriority: RawRepresentable, Comparable {
         }
     }
 
-    public mutating func increase() {
+    @discardableResult
+    public mutating func increase() -> Bool {
         switch self {
         case .minimal: self = .low
         case .low: self = .medium
@@ -66,11 +67,14 @@ public enum TaskPriority: RawRepresentable, Comparable {
             } else {
                 self = .critical
             }
-        default: break
+        default: return false
         }
+
+        return true
     }
 
-    public mutating func decrease() {
+    @discardableResult
+    public mutating func decrease() -> Bool {
         switch self {
         case .low: self = .minimal
         case .medium: self = .low
@@ -86,8 +90,10 @@ public enum TaskPriority: RawRepresentable, Comparable {
             } else {
                 self = .minimal
             }
-        default: break
+        default: return false
         }
+
+        return true
     }
 
     public static func == (lhs: TaskPriority, rhs: TaskPriority) -> Bool {

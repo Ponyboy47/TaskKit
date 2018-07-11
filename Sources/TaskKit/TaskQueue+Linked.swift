@@ -110,33 +110,15 @@ open class LinkedTaskQueue: TaskQueue {
         }
     }
 
-    private enum DependencyState {
-        case waiting
-        case beginning
-        case running
-        case failed
-        case notFound
-    }
-
-    private func find(task: Task) -> (DependencyState, SetIndex<LinkedTaskQueue>?) {
+    private func find(task: Task) -> SetIndex<LinkedTaskQueue>? {
         for queue in linkedQueues {
-            if queue.waiting.first(where: { $0.id == task.id }) != nil {
-                return (.waiting, linkedQueues.index(of: queue))
-            } else if queue.beginning.first(where: { $0.id == task.id }) != nil {
-                return (.beginning, linkedQueues.index(of: queue))
-            } else if queue.running.first(where: { $0.id == task.id }) != nil {
-                return (.running, linkedQueues.index(of: queue))
-            } else if queue.failed.first(where: { $0.id == task.id }) != nil {
-                return (.failed, linkedQueues.index(of: queue))
+            queue._tasksSemaphore.wait()
+            if queue.tasks.first(where: { $0.id == task.id }) != nil {
+                return linkedQueues.index(of: queue)
             }
+            queue._tasksSemaphore.signal()
         }
-        return (.notFound, nil)
-    }
-
-    func increasePriority(_ task: Task) {
-        guard let index = waiting.index(where: { $0.id == task.id }) else { return }
-        waiting[index].priority.increase()
-        type(of: self).sort(&tasks)
+        return nil
     }
 
     override func prepare(_ task: DependentTask) -> Task? {
@@ -145,26 +127,39 @@ open class LinkedTaskQueue: TaskQueue {
         guard task.waiting.isEmpty else {
             var groups: [DispatchGroup] = []
             for dep in task.waiting {
-                let (depState, queueIndex) = find(task: dep)
-                switch depState {
-                case .waiting:
-                    if dependentTaskOptions.contains(.increaseDependencyPriority), let index = queueIndex {
-                        linkedQueues[index].increasePriority(dep)
-                    }
-                    if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
-                        task.priority.decrease()
-                        type(of: self).sort(&tasks)
-                    }
-                case .failed:
+                switch dep.state {
+                case .failed, .done(.cancelling), .currently(.cancelling):
                     task.state = .dependency(dep)
                     failed(task)
                     return nil
-                case .notFound:
-                    fatalError("Could not find dependency task \(dep) in any of the linked queues. Task \(task) will never be able to execute!")
+                case .done(.executing): continue
                 default:
-                    guard let index = queueIndex else { break }
-                    guard let group = linkedQueues[index]._groups[dep.id] else { break }
-                    groups.append(group)
+                    var changed = !dependentTaskOptions.isEmpty
+                    if dependentTaskOptions.contains(.increaseDependencyPriority) {
+                        changed = dep.priority.increase()
+                    }
+                    if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
+                        changed = task.priority.decrease()
+                    }
+
+                    if let index = find(task: dep) {
+                        if changed {
+                            type(of: self).sort(&linkedQueues[index].tasks)
+                        }
+                        linkedQueues[index]._tasksSemaphore.signal()
+                        guard let group = linkedQueues[index]._groups[dep.id] else { continue }
+                        groups.append(group)
+                    } else if tasks.index(where: { $0.id == dep.id }) != nil {
+                        if changed {
+                            _tasksSemaphore.waitAndRun {
+                                type(of: self).sort(&tasks)
+                            }
+                        }
+                        guard let group = _groups[dep.id] else { continue }
+                        groups.append(group)
+                    } else {
+                        fatalError("Could not find dependency task \(dep) in any of the linked queues. Task \(task) will never be able to execute!")
+                    }
                 }
             }
 
@@ -188,25 +183,25 @@ open class LinkedTaskQueue: TaskQueue {
 
             if let waited = _waitedForDependencies.first {
                 upNext = waited
-            } else if let ready = waiting.first {
+            } else if let ready = self.upNext {
                 upNext = ready
             } else { return }
 
-            _waitingForDependencySemaphore.waitAndRun {
-                if let groups = _waitingForDependency[upNext.id] {
-                    queue.async(qos: .background) {
-                        for group in groups {
-                            group.wait()
-                        }
-                        upNext.state = .done(.waiting)
-                        self._getNext = true
+            if let groups = _waitingForDependency[upNext.id] {
+                queue.async(qos: .background) {
+                    for group in groups {
+                        group.wait()
                     }
+                    upNext.state = .done(.waiting)
+                    self._getNext = true
+                }
 
+                _waitingForDependencySemaphore.waitAndRun {
                     _waitingForDependency.removeValue(forKey: upNext.id)
+                }
 
-                    return
-                } else if case .currently(.waiting) = upNext.state { return }
-            }
+                return
+            } else if case .currently(.waiting) = upNext.state { return }
 
             start(upNext)
         }
