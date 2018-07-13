@@ -18,12 +18,18 @@ open class TaskQueue: Hashable {
     /// A semaphore to use for preventing simultaneous write access to the array
     var _tasksSemaphore = DispatchSemaphore(value: 1)
 
-    var waiting: [Task] {
+    public var waiting: [Task] {
         return tasks.filter {
             return $0.state == .ready
         }
     }
-    var beginning: [Task] {
+    var upNext: Task? {
+        return tasks.first(where: {
+            return $0.state == .ready
+        })
+    }
+
+    public var beginning: [Task] {
         let beginnings: [TaskState] = [.beginning, .preparing, .configuring]
         return tasks.filter {
             if beginnings.map({ return .done($0) }).contains($0.state) {
@@ -33,12 +39,12 @@ open class TaskQueue: Hashable {
             return beginnings.map({ return .currently($0) }).contains($0.state)
         }
     }
-    var running: [Task] {
+    public var running: [Task] {
         return tasks.filter {
             return [.executing, .pausing, .cancelling].map({ return .currently($0) }).contains($0.state)
         }
     }
-    var failed: [Task] {
+    public var failed: [Task] {
         return tasks.filter {
             switch $0.state {
             case .failed: return true
@@ -46,31 +52,75 @@ open class TaskQueue: Hashable {
             }
         }
     }
-    var succeeded: [Task] {
+    public var succeeded: [Task] {
         return tasks.filter {
             return $0.state == .succeeded
         }
     }
-    var paused: [Task] {
+    public var paused: [Task] {
         return tasks.filter {
             return $0.state == .paused
         }
     }
-    var cancelled: [Task] {
+    public var cancelled: [Task] {
         return tasks.filter {
             return $0.state == .cancelled
         }
     }
 
+    // NOTE: Calculating the following Ints is implemented as an O(n) operation
+    // curretnly. It used to use the above calculated vars, which would have
+    // been worse than O(n)
+
     /// The number of tasks that are currently running or beginning
     var _active: Int {
-        return running.count + beginning.count
+        return tasks.reduce(0) {
+            switch $1.state {
+            case .currently(let state):
+                switch state {
+                case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
+                default: return $0
+                }
+            case .done(let state):
+                switch state {
+                case .beginning, .preparing, .configuring: return $0 + 1
+                default: return $0
+                }
+            default: return $0
+            }
+        }
     }
     /// The number of tasks that are currently running
-    public var active: Int { return running.count }
+    public var active: Int {
+        return tasks.reduce(0) {
+            switch $1.state {
+            case .currently(let state):
+                switch state {
+                case .executing, .pausing, .cancelling: return $0 + 1
+                default: return $0
+                }
+            default: return $0
+            }
+        }
+    }
     /// The total number of tasks left (excluding dependencies)
     public var remaining: Int {
-        return waiting.count + running.count + beginning.count + paused.count
+        return tasks.reduce(0) {
+            switch $1.state {
+            case .ready: return $0 + 1
+            case .currently(let state):
+                switch state {
+                case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
+                default: return $0
+                }
+            case .done(let state):
+                switch state {
+                case .beginning, .preparing, .configuring, .pausing: return $0 + 1
+                default: return $0
+                }
+            default: return $0
+            }
+        }
     }
     public var isDone: Bool {
         return remaining == 0
@@ -276,8 +326,7 @@ open class TaskQueue: Hashable {
         task.state = .currently(.preparing)
 
         var dependency: Task? = nil
-        while !task.waiting.isEmpty {
-            let dep = task.waiting.first!
+        while let dep = task.upNext {
             start(dep, autostart: false, dependent: task)
             _groups[dep.id]!.wait()
 
@@ -353,7 +402,7 @@ open class TaskQueue: Hashable {
         guard _active < maxSimultaneous else { return }
 
         _tasksSemaphore.waitAndRun {
-            guard let upNext = waiting.first else { return }
+            guard let upNext = upNext else { return }
             start(upNext)
         }
     }

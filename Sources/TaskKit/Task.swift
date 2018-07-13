@@ -118,13 +118,21 @@ public extension DependentTask {
         dependencies.append(task)
     }
 
-    public var waiting: [Task] {
-        return dependencies.compactMap { task in
+    public var incompleteDependencies: [Task] {
+        return dependencies.filter { task in
             switch task.state {
-            case .done(.executing): return nil
-            default: return task
+            case .done(.executing): return false
+            default: return true
             }
         }
+    }
+    var upNext: Task? {
+        return dependencies.first(where: { task in
+            switch task.state {
+            case .done(.executing): return false
+            default: return true
+            }
+        })
     }
 }
 
