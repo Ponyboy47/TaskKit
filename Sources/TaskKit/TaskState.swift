@@ -35,6 +35,9 @@ public enum TaskState: CustomStringConvertible, Equatable, Comparable {
     public static let paused: TaskState = .done(.pausing)
     public static let cancelled: TaskState = .done(.cancelling)
     public static let succeeded: TaskState = .done(.executing)
+    public static let prepared: TaskState = .done(.preparing)
+    public static let configured: TaskState = .done(.configuring)
+    public static let waited: TaskState = .done(.waiting)
 
     public var description: String {
         switch self {

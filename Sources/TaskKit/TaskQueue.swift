@@ -29,21 +29,27 @@ open class TaskQueue: Hashable {
         })
     }
 
-    public var beginning: [Task] {
-        let beginnings: [TaskState] = [.beginning, .preparing, .configuring]
-        return tasks.filter {
-            if beginnings.map({ return .done($0) }).contains($0.state) {
-                return true
-            }
+    private static let beginningStates: [TaskState] = {
+        let currently: [TaskState] = [.beginning, .preparing, .configuring].map({ return .currently($0) })
+        let done: [TaskState] = [.beginning, .preparing, .configuring].map({ return .done($0) })
 
-            return beginnings.map({ return .currently($0) }).contains($0.state)
+        return currently + done
+    }()
+    public var beginning: [Task] {
+        return tasks.filter {
+            return TaskQueue.beginningStates.contains($0.state)
         }
     }
+
+    private static let runningStates: [TaskState] = {
+        return [.executing, .pausing, .cancelling].map({ return .currently($0) })
+    }()
     public var running: [Task] {
         return tasks.filter {
-            return [.executing, .pausing, .cancelling].map({ return .currently($0) }).contains($0.state)
+            return TaskQueue.runningStates.contains($0.state)
         }
     }
+
     public var failed: [Task] {
         return tasks.filter {
             switch $0.state {
@@ -52,16 +58,19 @@ open class TaskQueue: Hashable {
             }
         }
     }
+
     public var succeeded: [Task] {
         return tasks.filter {
             return $0.state == .succeeded
         }
     }
+
     public var paused: [Task] {
         return tasks.filter {
             return $0.state == .paused
         }
     }
+
     public var cancelled: [Task] {
         return tasks.filter {
             return $0.state == .cancelled
@@ -72,54 +81,35 @@ open class TaskQueue: Hashable {
     // curretnly. It used to use the above calculated vars, which would have
     // been worse than O(n)
 
+    static let _activeStates: [TaskState] = {
+        return TaskQueue.beginningStates + TaskQueue.runningStates
+    }()
     /// The number of tasks that are currently running or beginning
     var _active: Int {
         return tasks.reduce(0) {
-            switch $1.state {
-            case .currently(let state):
-                switch state {
-                case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
-                default: return $0
-                }
-            case .done(let state):
-                switch state {
-                case .beginning, .preparing, .configuring: return $0 + 1
-                default: return $0
-                }
-            default: return $0
+            if TaskQueue._activeStates.contains($1.state) {
+                return $0 + 1
             }
+
+            return $0
         }
     }
     /// The number of tasks that are currently running
     public var active: Int {
         return tasks.reduce(0) {
-            switch $1.state {
-            case .currently(let state):
-                switch state {
-                case .executing, .pausing, .cancelling: return $0 + 1
-                default: return $0
-                }
-            default: return $0
-            }
+            return TaskQueue.runningStates.contains($1.state) ? $0 + 1 : $0
         }
     }
     /// The total number of tasks left (excluding dependencies)
     public var remaining: Int {
         return tasks.reduce(0) {
-            switch $1.state {
-            case .ready: return $0 + 1
-            case .currently(let state):
-                switch state {
-                case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
-                default: return $0
-                }
-            case .done(let state):
-                switch state {
-                case .beginning, .preparing, .configuring, .pausing: return $0 + 1
-                default: return $0
-                }
-            default: return $0
+            if $1.state == .ready {
+                return $0 + 1
+            } else if TaskQueue._activeStates.contains($1.state) {
+                return $0 + 1
             }
+
+            return $0
         }
     }
     public var isDone: Bool {
@@ -150,7 +140,8 @@ open class TaskQueue: Hashable {
                 _getNextSemaphore.wait()
                 __getNext = newValue
 
-                if tasks.first(where: { $0.state == .ready }) != nil {
+                _tasksSemaphore.wait()
+                if upNext != nil {
                     queue.async(qos: .background) {
                         self.startNext()
                         self._getNext = false
@@ -158,6 +149,7 @@ open class TaskQueue: Hashable {
                 } else {
                     __getNext = false
                 }
+                _tasksSemaphore.signal()
 
                 _getNextSemaphore.signal()
             } else if _active < maxSimultaneous {
@@ -340,7 +332,7 @@ open class TaskQueue: Hashable {
             return nil
         }
 
-        task.state = .done(.preparing)
+        task.state = .prepared
         return task
     }
 
@@ -358,7 +350,7 @@ open class TaskQueue: Hashable {
             return nil
         }
 
-        task.state = .done(.configuring)
+        task.state = .configured
         return task
     }
 

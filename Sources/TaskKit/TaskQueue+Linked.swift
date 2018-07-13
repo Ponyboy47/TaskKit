@@ -12,56 +12,41 @@ open class LinkedTaskQueue: TaskQueue {
     private var _waitingForDependencySemaphore = DispatchSemaphore(value: 1)
 
     override public var waiting: [Task] {
+        let waiting: [TaskState] = [.ready, .currently(.waiting)]
         return tasks.filter {
-            switch $0.state {
-            case .ready, .currently(.waiting): return true
-            default: return false
-            }
+            return waiting.contains($0.state)
         }
     }
     private var _waitedForDependencies: [Task] {
-        return tasks.filter { task in
-            switch task.state {
-            case .done(.waiting): return true
-            default: return false
-            }
+        return tasks.filter {
+            return $0.state == .waited
         }
     }
 
+    private static let _linkedActiveStates: [TaskState] = {
+        var states = LinkedTaskQueue._activeStates
+        states.append(.done(.waiting))
+        return states
+    }()
     override var _active: Int {
         return tasks.reduce(0) {
-            switch $1.state {
-            case .currently(let state):
-                switch state {
-                case .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
-                default: return $0
-                }
-            case .done(let state):
-                switch state {
-                case .waiting, .beginning, .preparing, .configuring: return $0 + 1
-                default: return $0
-                }
-            default: return $0
+            if LinkedTaskQueue._linkedActiveStates.contains($1.state) {
+                return $0 + 1
             }
+
+            return $0
         }
     }
     /// The total number of tasks left (excluding dependencies)
     override public var remaining: Int {
         return tasks.reduce(0) {
-            switch $1.state {
-            case .ready: return $0 + 1
-            case .currently(let state):
-                switch state {
-                case .waiting, .beginning, .preparing, .configuring, .executing, .pausing, .cancelling: return $0 + 1
-                default: return $0
-                }
-            case .done(let state):
-                switch state {
-                case .waiting, .beginning, .preparing, .configuring, .pausing: return $0 + 1
-                default: return $0
-                }
-            default: return $0
+            if $1.state == .ready {
+                return $0 + 1
+            } else if LinkedTaskQueue._linkedActiveStates.contains($1.state) {
+                return $0 + 1
             }
+
+            return $0
         }
     }
 
@@ -145,11 +130,15 @@ open class LinkedTaskQueue: TaskQueue {
 
     private func find(task: Task) -> SetIndex<LinkedTaskQueue>? {
         for queue in linkedQueues {
+            _linkedQueuesSemaphore.wait()
             queue._tasksSemaphore.wait()
+
             if queue.tasks.first(where: { $0.id == task.id }) != nil {
                 return linkedQueues.index(of: queue)
             }
+
             queue._tasksSemaphore.signal()
+            _linkedQueuesSemaphore.signal()
         }
         return nil
     }
@@ -166,12 +155,16 @@ open class LinkedTaskQueue: TaskQueue {
                     failed(task)
                     return nil
                 default:
-                    var changed = !dependentTaskOptions.isEmpty
+                    var changed = false
                     if dependentTaskOptions.contains(.increaseDependencyPriority) {
                         changed = dep.priority.increase()
                     }
                     if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
-                        changed = task.priority.decrease()
+                        if changed {
+                            task.priority.decrease()
+                        } else {
+                            changed = task.priority.decrease()
+                        }
                     }
 
                     if let index = find(task: dep) {
@@ -179,8 +172,11 @@ open class LinkedTaskQueue: TaskQueue {
                             type(of: self).sort(&linkedQueues[index].tasks)
                         }
                         linkedQueues[index]._tasksSemaphore.signal()
+
                         guard let group = linkedQueues[index]._groups[dep.id] else { continue }
                         groups.append(group)
+
+                        _linkedQueuesSemaphore.signal()
                     } else if tasks.index(where: { $0.id == dep.id }) != nil {
                         if changed {
                             _tasksSemaphore.waitAndRun {
