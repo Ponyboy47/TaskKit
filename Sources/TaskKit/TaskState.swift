@@ -1,4 +1,22 @@
-public enum TaskState: CustomStringConvertible {
+public enum TaskState: CustomStringConvertible, Equatable, Comparable {
+    private var rawValue: UInt16 {
+        switch self {
+        case .failed(let state): return state.rawValue << 1
+        case .dependency(let task): return task.state.rawValue << 2
+        case .currently(let state): return state.rawValue << 4
+        case .done(let state): return state.rawValue << 8
+        case .cancelling: return 1
+        case .ready: return 2
+        case .pausing: return 3
+        case .beginning: return 4
+        case .preparing: return 5
+        case .waiting: return 6
+        case .configuring: return 7
+        case .resuming: return 8
+        case .executing: return 9
+        }
+    }
+
     case ready
     case beginning
     case preparing
@@ -36,5 +54,13 @@ public enum TaskState: CustomStringConvertible {
         case .failed(let state): return "failed(\(state))"
         case .dependency(let task): return "dependency(\(task), state: \(task.status.state))"
         }
+    }
+
+    public static func == (lhs: TaskState, rhs: TaskState) -> Bool {
+        return lhs.rawValue == rhs.rawValue
+    }
+
+    public static func < (lhs: TaskState, rhs: TaskState) -> Bool {
+        return lhs.rawValue < rhs.rawValue
     }
 }

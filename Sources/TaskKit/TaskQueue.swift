@@ -20,34 +20,22 @@ open class TaskQueue: Hashable {
 
     var waiting: [Task] {
         return tasks.filter {
-            switch $0.state {
-            case .ready: return true
-            default: return false
-            }
+            return $0.state == .ready
         }
     }
     var beginning: [Task] {
+        let beginnings: [TaskState] = [.beginning, .preparing, .configuring]
         return tasks.filter {
-            switch $0.state {
-            case .done(let state), .currently(let state):
-                switch state {
-                    case .beginning, .preparing, .configuring: return true
-                    default: return false
-                }
-            default: return false
+            if beginnings.map({ return .done($0) }).contains($0.state) {
+                return true
             }
+
+            return beginnings.map({ return .currently($0) }).contains($0.state)
         }
     }
     var running: [Task] {
         return tasks.filter {
-            switch $0.state {
-            case .currently(let state):
-                switch state {
-                case .executing, .pausing, .cancelling: return true
-                default: return false
-                }
-            default: return false
-            }
+            return [.executing, .pausing, .cancelling].map({ return .currently($0) }).contains($0.state)
         }
     }
     var failed: [Task] {
@@ -60,26 +48,17 @@ open class TaskQueue: Hashable {
     }
     var succeeded: [Task] {
         return tasks.filter {
-            switch $0.state {
-            case .done(.executing): return true
-            default: return false
-            }
+            return $0.state == .succeeded
         }
     }
     var paused: [Task] {
         return tasks.filter {
-            switch $0.state {
-            case .done(.pausing): return true
-            default: return false
-            }
+            return $0.state == .paused
         }
     }
     var cancelled: [Task] {
         return tasks.filter {
-            switch $0.state {
-            case .done(.cancelling): return true
-            default: return false
-            }
+            return $0.state == .cancelled
         }
     }
 
@@ -121,7 +100,7 @@ open class TaskQueue: Hashable {
                 _getNextSemaphore.wait()
                 __getNext = newValue
 
-                if !waiting.isEmpty {
+                if tasks.first(where: { $0.state == .ready }) != nil {
                     queue.async(qos: .background) {
                         self.startNext()
                         self._getNext = false
