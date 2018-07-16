@@ -4,12 +4,12 @@ import Dispatch
 /// A class very similar to a TaskQueue, except this queue makes the assumption that any dependent tasks are added to either this queue or one of the linked queues
 open class LinkedTaskQueue: TaskQueue {
     public private(set) var linkedQueues: Set<LinkedTaskQueue> = Set()
-    private let _linkedQueuesSemaphore = DispatchSemaphore(value: 1)
+    private let _linkedQueuesQueue = DispatchQueue(label: "com.TaskKit.linked", qos: .utility)
 
     public var dependentTaskOptions: DependentTaskOption = []
 
     private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
-    private var _waitingForDependencySemaphore = DispatchSemaphore(value: 1)
+    private var _waitingForDependencyQueue = DispatchQueue(label: "com.TaskKit.waiting", qos: .utility)
 
     override public var waiting: [Task] {
         let waiting: [TaskState] = [.ready, .currently(.waiting)]
@@ -71,7 +71,7 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     public func addLink(to queue: LinkedTaskQueue) {
-        _linkedQueuesSemaphore.waitAndRun {
+        _linkedQueuesQueue.sync {
             linkedQueues.insert(queue)
         }
 
@@ -81,7 +81,7 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     public func addLinks(to queues: [LinkedTaskQueue]) {
-        _linkedQueuesSemaphore.waitAndRun {
+        _linkedQueuesQueue.sync {
             linkedQueues.formUnion(queues)
         }
 
@@ -129,18 +129,22 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     private func find(task: Task) -> SetIndex<LinkedTaskQueue>? {
-        for queue in linkedQueues {
-            _linkedQueuesSemaphore.wait()
-            queue._tasksSemaphore.wait()
+        var index: SetIndex<LinkedTaskQueue>? = nil
 
-            if queue.tasks.first(where: { $0.id == task.id }) != nil {
-                return linkedQueues.index(of: queue)
+        for queue in linkedQueues {
+            var breakOut = false
+            _linkedQueuesQueue.sync {
+                queue._tasksQueue.sync {
+                    if queue.tasks.first(where: { $0.id == task.id }) != nil {
+                        index = linkedQueues.index(of: queue)
+                        breakOut = true
+                    }
+                }
             }
 
-            queue._tasksSemaphore.signal()
-            _linkedQueuesSemaphore.signal()
+            guard !breakOut else { break }
         }
-        return nil
+        return index
     }
 
     override func prepare(_ task: DependentTask) -> Task? {
@@ -171,15 +175,12 @@ open class LinkedTaskQueue: TaskQueue {
                         if changed {
                             type(of: self).sort(&linkedQueues[index].tasks)
                         }
-                        linkedQueues[index]._tasksSemaphore.signal()
 
                         guard let group = linkedQueues[index]._groups[dep.id] else { continue }
                         groups.append(group)
-
-                        _linkedQueuesSemaphore.signal()
                     } else if tasks.index(where: { $0.id == dep.id }) != nil {
                         if changed {
-                            _tasksSemaphore.waitAndRun {
+                            _tasksQueue.sync {
                                 type(of: self).sort(&tasks)
                             }
                         }
@@ -192,7 +193,7 @@ open class LinkedTaskQueue: TaskQueue {
             }
 
             task.state = .currently(.waiting)
-            _waitingForDependencySemaphore.waitAndRun {
+            _waitingForDependencyQueue.sync {
                 _waitingForDependency[task.id] = groups
             }
             self._getNext = true
@@ -206,7 +207,7 @@ open class LinkedTaskQueue: TaskQueue {
     override func startNext() {
         guard _active < maxSimultaneous else { return }
 
-        _tasksSemaphore.waitAndRun {
+        _tasksQueue.sync {
             let upNext: Task
 
             if let waited = _waitedForDependencies.first {
@@ -224,7 +225,7 @@ open class LinkedTaskQueue: TaskQueue {
                     self._getNext = true
                 }
 
-                _waitingForDependencySemaphore.waitAndRun {
+                _waitingForDependencyQueue.sync {
                     _waitingForDependency.removeValue(forKey: upNext.id)
                 }
 

@@ -16,7 +16,7 @@ open class TaskQueue: Hashable {
     /// The tasks that are/have been executed
     public internal(set) var tasks: [Task] = []
     /// A semaphore to use for preventing simultaneous write access to the array
-    var _tasksSemaphore = DispatchSemaphore(value: 1)
+    var _tasksQueue = DispatchQueue(label: "com.TaskKit.tasks", qos: .utility)
 
     public var waiting: [Task] {
         return tasks.filter {
@@ -129,7 +129,7 @@ open class TaskQueue: Hashable {
     /// The underlying DispatchGroups that tasks are added to when running
     var _groups: [UUID: DispatchGroup] = [:]
     /// A semaphore to use for preventing simultaneous access to the _groups dictionary
-    private var _groupsSemaphore = DispatchSemaphore(value: 1)
+    private var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups", qos: .utility)
 
     /// When set to true, will grab the next task and begin executing it
     private var __getNext: Bool = false
@@ -137,21 +137,20 @@ open class TaskQueue: Hashable {
         get { return __getNext }
         set {
             if newValue {
-                _getNextSemaphore.wait()
-                __getNext = newValue
+                _getNextQueue.sync {
+                    __getNext = newValue
 
-                _tasksSemaphore.wait()
-                if upNext != nil {
-                    queue.async(qos: .background) {
-                        self.startNext()
-                        self._getNext = false
+                    _tasksQueue.sync {
+                        if upNext != nil {
+                            queue.async(qos: .background) {
+                                self.startNext()
+                                self._getNext = false
+                            }
+                        } else {
+                            __getNext = false
+                        }
                     }
-                } else {
-                    __getNext = false
                 }
-                _tasksSemaphore.signal()
-
-                _getNextSemaphore.signal()
             } else if _active < maxSimultaneous {
                 self._getNext = true
             }
@@ -159,7 +158,7 @@ open class TaskQueue: Hashable {
     }
 
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
-    private var _getNextSemaphore = DispatchSemaphore(value: 1)
+    private var _getNextQueue = DispatchQueue(label: "com.TaskKit.next", qos: .utility)
 
     /// The default number of tasks that can run simultaneously
     public static let defaultMaxSimultaneous: Int = 1
@@ -223,7 +222,7 @@ open class TaskQueue: Hashable {
     */
     public func addTask(_ task: Task) {
         guard tasks.index(where: { $0.id == task.id }) == nil else { return }
-        _tasksSemaphore.waitAndRun {
+        _tasksQueue.sync {
             tasks.append(task)
             type(of: self).sort(&tasks)
         }
@@ -244,7 +243,7 @@ open class TaskQueue: Hashable {
             guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
             return task
         }
-        _tasksSemaphore.waitAndRun {
+        _tasksQueue.sync {
             self.tasks += new
             type(of: self).sort(&self.tasks)
         }
@@ -393,7 +392,7 @@ open class TaskQueue: Hashable {
     func startNext() {
         guard _active < maxSimultaneous else { return }
 
-        _tasksSemaphore.waitAndRun {
+        _tasksQueue.sync {
             guard let upNext = upNext else { return }
             start(upNext)
         }
@@ -409,7 +408,7 @@ open class TaskQueue: Hashable {
         task.state = .currently(.beginning)
         let group = DispatchGroup()
 
-        _groupsSemaphore.waitAndRun {
+        _groupsQueue.sync {
             _groups[task.id] = group
         }
 
@@ -447,7 +446,7 @@ open class TaskQueue: Hashable {
             if let dependent = dependent {
                 dependent.dependencyCompletionBlock(task)
             }
-            self._groupsSemaphore.waitAndRun {
+            self._groupsQueue.sync {
                 self._groups.removeValue(forKey: uniqueKey)
             }
 
@@ -544,7 +543,7 @@ open class TaskQueue: Hashable {
     public func wait() {
         while !_groups.isEmpty {
             var group: DispatchGroup!
-            _groupsSemaphore.waitAndRun {
+            _groupsQueue.sync {
                 let (key, g) = _groups.first!
                 _groups.removeValue(forKey: key)
                 group = g
