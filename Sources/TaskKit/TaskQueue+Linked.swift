@@ -11,15 +11,19 @@ open class LinkedTaskQueue: TaskQueue {
     private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
     private var _waitingForDependencyQueue = DispatchQueue(label: "com.TaskKit.waiting", qos: .utility)
 
+    private static let _waitingStates: [TaskState] = [.ready, .currently(.waiting)]
     override public var waiting: [Task] {
-        let waiting: [TaskState] = [.ready, .currently(.waiting)]
-        return tasks.filter {
-            return waiting.contains($0.state)
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return LinkedTaskQueue._waitingStates.contains($0.state)
+            }
         }
     }
     private var _waitedForDependencies: [Task] {
-        return tasks.filter {
-            return $0.state == .waited
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return $0.state == .waited
+            }
         }
     }
 
@@ -29,24 +33,28 @@ open class LinkedTaskQueue: TaskQueue {
         return states
     }()
     override var _active: Int {
-        return tasks.reduce(0) {
-            if LinkedTaskQueue._linkedActiveStates.contains($1.state) {
-                return $0 + 1
-            }
+        return _tasksQueue.sync {
+            return tasks.reduce(0) {
+                if LinkedTaskQueue._linkedActiveStates.contains($1.state) {
+                    return $0 + 1
+                }
 
-            return $0
+                return $0
+            }
         }
     }
     /// The total number of tasks left (excluding dependencies)
     override public var remaining: Int {
-        return tasks.reduce(0) {
-            if $1.state == .ready {
-                return $0 + 1
-            } else if LinkedTaskQueue._linkedActiveStates.contains($1.state) {
-                return $0 + 1
-            }
+        return _tasksQueue.sync {
+            return tasks.reduce(0) {
+                if $1.state == .ready {
+                    return $0 + 1
+                } else if LinkedTaskQueue._linkedActiveStates.contains($1.state) {
+                    return $0 + 1
+                }
 
-            return $0
+                return $0
+            }
         }
     }
 
@@ -173,7 +181,9 @@ open class LinkedTaskQueue: TaskQueue {
 
                     if let index = find(task: dep) {
                         if changed {
-                            type(of: self).sort(&linkedQueues[index].tasks)
+                            linkedQueues[index]._tasksQueue.sync {
+                                type(of: self).sort(&linkedQueues[index].tasks)
+                            }
                         }
 
                         guard let group = linkedQueues[index]._groups[dep.id] else { continue }
@@ -207,32 +217,30 @@ open class LinkedTaskQueue: TaskQueue {
     override func startNext() {
         guard _active < maxSimultaneous else { return }
 
-        _tasksQueue.sync {
-            let upNext: Task
+       let upNext: Task
 
-            if let waited = _waitedForDependencies.first {
-                upNext = waited
-            } else if let ready = self.upNext {
-                upNext = ready
-            } else { return }
+        if let waited = _waitedForDependencies.first {
+            upNext = waited
+        } else if let ready = self.upNext {
+            upNext = ready
+        } else { return }
 
-            if let groups = _waitingForDependency[upNext.id] {
-                queue.async(qos: .background) {
-                    for group in groups {
-                        group.wait()
-                    }
-                    upNext.state = .done(.waiting)
-                    self._getNext = true
+        if let groups = _waitingForDependency[upNext.id] {
+            queue.async(qos: .background) {
+                for group in groups {
+                    group.wait()
                 }
+                upNext.state = .done(.waiting)
+                self._getNext = true
+            }
 
-                _waitingForDependencyQueue.sync {
-                    _waitingForDependency.removeValue(forKey: upNext.id)
-                }
+            _waitingForDependencyQueue.sync {
+                _waitingForDependency.removeValue(forKey: upNext.id)
+            }
 
-                return
-            } else if case .currently(.waiting) = upNext.state { return }
+            return
+        } else if case .currently(.waiting) = upNext.state { return }
 
-            start(upNext)
-        }
+        start(upNext)
     }
 }

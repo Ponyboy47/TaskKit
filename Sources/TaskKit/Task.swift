@@ -20,11 +20,13 @@ public protocol Task: class {
     func main() -> Bool
 }
 
+private let _taskStateQueue = DispatchQueue(label: "com.TaskKit.task.state", qos: .utility)
+
 public extension Task {
     public var id: UUID { return status.id }
     public var state: TaskState {
-        get { return status.state }
-        set { status.state = newValue }
+        get { return _taskStateQueue.sync { return status.state } }
+        set { _taskStateQueue.async { self.status.state = newValue } }
     }
 
     /**

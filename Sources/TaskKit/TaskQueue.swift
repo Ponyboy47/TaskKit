@@ -19,14 +19,18 @@ open class TaskQueue: Hashable {
     var _tasksQueue = DispatchQueue(label: "com.TaskKit.tasks", qos: .utility)
 
     public var waiting: [Task] {
-        return tasks.filter {
-            return $0.state == .ready
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return $0.state == .ready
+            }
         }
     }
     var upNext: Task? {
-        return tasks.first(where: {
-            return $0.state == .ready
-        })
+        return _tasksQueue.sync {
+            return tasks.first(where: {
+                return $0.state == .ready
+            })
+        }
     }
 
     private static let beginningStates: [TaskState] = {
@@ -36,8 +40,10 @@ open class TaskQueue: Hashable {
         return currently + done
     }()
     public var beginning: [Task] {
-        return tasks.filter {
-            return TaskQueue.beginningStates.contains($0.state)
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return TaskQueue.beginningStates.contains($0.state)
+            }
         }
     }
 
@@ -45,35 +51,45 @@ open class TaskQueue: Hashable {
         return [.executing, .pausing, .cancelling].map({ return .currently($0) })
     }()
     public var running: [Task] {
-        return tasks.filter {
-            return TaskQueue.runningStates.contains($0.state)
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return TaskQueue.runningStates.contains($0.state)
+            }
         }
     }
 
     public var failed: [Task] {
-        return tasks.filter {
-            switch $0.state {
-            case .failed: return true
-            default: return false
+        return _tasksQueue.sync {
+            return tasks.filter {
+                switch $0.state {
+                case .failed: return true
+                default: return false
+                }
             }
         }
     }
 
     public var succeeded: [Task] {
-        return tasks.filter {
-            return $0.state == .succeeded
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return $0.state == .succeeded
+            }
         }
     }
 
     public var paused: [Task] {
-        return tasks.filter {
-            return $0.state == .paused
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return $0.state == .paused
+            }
         }
     }
 
     public var cancelled: [Task] {
-        return tasks.filter {
-            return $0.state == .cancelled
+        return _tasksQueue.sync {
+            return tasks.filter {
+                return $0.state == .cancelled
+            }
         }
     }
 
@@ -86,30 +102,36 @@ open class TaskQueue: Hashable {
     }()
     /// The number of tasks that are currently running or beginning
     var _active: Int {
-        return tasks.reduce(0) {
-            if TaskQueue._activeStates.contains($1.state) {
-                return $0 + 1
-            }
+        return _tasksQueue.sync {
+            return tasks.reduce(0) {
+                if TaskQueue._activeStates.contains($1.state) {
+                    return $0 + 1
+                }
 
-            return $0
+                return $0
+            }
         }
     }
     /// The number of tasks that are currently running
     public var active: Int {
-        return tasks.reduce(0) {
-            return TaskQueue.runningStates.contains($1.state) ? $0 + 1 : $0
+        return _tasksQueue.sync {
+            return tasks.reduce(0) {
+                return TaskQueue.runningStates.contains($1.state) ? $0 + 1 : $0
+            }
         }
     }
     /// The total number of tasks left (excluding dependencies)
     public var remaining: Int {
-        return tasks.reduce(0) {
-            if $1.state == .ready {
-                return $0 + 1
-            } else if TaskQueue._activeStates.contains($1.state) {
-                return $0 + 1
-            }
+        return _tasksQueue.sync {
+            return tasks.reduce(0) {
+                if $1.state == .ready {
+                    return $0 + 1
+                } else if TaskQueue._activeStates.contains($1.state) {
+                    return $0 + 1
+                }
 
-            return $0
+                return $0
+            }
         }
     }
     public var isDone: Bool {
@@ -134,19 +156,21 @@ open class TaskQueue: Hashable {
     /// When set to true, will grab the next task and begin executing it
     private var __getNext: Bool = false
     var _getNext: Bool {
-        get { return __getNext }
+        get { return __getNextQueue.sync { return __getNext } }
         set {
             if newValue {
                 _getNextQueue.sync {
-                    __getNext = newValue
+                    __getNextQueue.sync {
+                        __getNext = newValue
+                    }
 
-                    _tasksQueue.sync {
-                        if upNext != nil {
-                            queue.async(qos: .background) {
-                                self.startNext()
-                                self._getNext = false
-                            }
-                        } else {
+                    if upNext != nil {
+                        queue.async(qos: .background) {
+                            self.startNext()
+                            self._getNext = false
+                        }
+                    } else {
+                        __getNextQueue.sync {
                             __getNext = false
                         }
                     }
@@ -159,6 +183,8 @@ open class TaskQueue: Hashable {
 
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
     private var _getNextQueue = DispatchQueue(label: "com.TaskKit.next", qos: .utility)
+    /// A semaphore to use for preventing simultaneous access to the _getNext boolean
+    private var __getNextQueue = DispatchQueue(label: "com.TaskKit._next", qos: .utility)
 
     /// The default number of tasks that can run simultaneously
     public static let defaultMaxSimultaneous: Int = 1
@@ -221,14 +247,14 @@ open class TaskQueue: Hashable {
     - Parameter task: The task to add
     */
     public func addTask(_ task: Task) {
-        guard tasks.index(where: { $0.id == task.id }) == nil else { return }
         _tasksQueue.sync {
+            guard tasks.index(where: { $0.id == task.id }) == nil else { return }
             tasks.append(task)
             type(of: self).sort(&tasks)
-        }
-        if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
-                self._getNext = true
+                if self._isActive && !self._getNext && self._active < self.maxSimultaneous {
+                    self._getNext = true
+                }
             }
         }
     }
@@ -239,17 +265,18 @@ open class TaskQueue: Hashable {
     - Parameter tasks: The tasks to add
     */
     public func addTasks(_ tasks: [Task]) {
-        let new: [Task] = tasks.compactMap { task in
-            guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
-            return task
-        }
         _tasksQueue.sync {
+            let new: [Task] = tasks.compactMap { task in
+                guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
+                return task
+            }
+
             self.tasks += new
             type(of: self).sort(&self.tasks)
-        }
-        if _isActive && !_getNext && _active < maxSimultaneous {
             queue.async(qos: .background) {
-                self._getNext = true
+                if self._isActive && !self._getNext && self._active < self.maxSimultaneous {
+                    self._getNext = true
+                }
             }
         }
     }
