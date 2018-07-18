@@ -151,7 +151,7 @@ open class TaskQueue: Hashable {
     /// The underlying DispatchGroups that tasks are added to when running
     var _groups: [UUID: DispatchGroup] = [:]
     /// A semaphore to use for preventing simultaneous access to the _groups dictionary
-    private var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups", qos: .utility, attributes: .concurrent)
+    var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups", qos: .utility, attributes: .concurrent)
 
     /// When set to true, will grab the next task and begin executing it
     private var __getNext: Bool = false
@@ -346,7 +346,7 @@ open class TaskQueue: Hashable {
         var dependency: Task? = nil
         while let dep = task.upNext {
             start(dep, autostart: false, dependent: task)
-            _groups[dep.id]!.wait()
+            _groupsQueue.sync { _groups[dep.id]!.wait() }
 
             dependency = failed.first(where: { $0.id == dep.id })
             guard dependency == nil else { break }
@@ -435,8 +435,8 @@ open class TaskQueue: Hashable {
         task.state = .currently(.beginning)
         let group = DispatchGroup()
 
-        _groupsQueue.sync {
-            _groups[task.id] = group
+        _groupsQueue.async(flags: .barrier) {
+            self._groups[task.id] = group
         }
 
         queue.async(group: group, qos: task.qos) {
@@ -473,7 +473,7 @@ open class TaskQueue: Hashable {
             if let dependent = dependent {
                 dependent.dependencyCompletionBlock(task)
             }
-            self._groupsQueue.sync {
+            self._groupsQueue.async(flags: .barrier) {
                 self._groups.removeValue(forKey: uniqueKey)
             }
 
@@ -568,14 +568,12 @@ open class TaskQueue: Hashable {
 
     /// Blocks execution until all tasks have finished executing (including the tasks not currently running)
     public func wait() {
-        while !_groups.isEmpty {
-            var group: DispatchGroup!
-            _groupsQueue.sync {
-                let (key, g) = _groups.first!
-                _groups.removeValue(forKey: key)
-                group = g
+		if let (key, group) = _groupsQueue.sync(execute: { return _groups.first }) {
+            _groupsQueue.async(flags: .barrier) {
+                self._groups.removeValue(forKey: key)
             }
             group.wait()
+            self.wait()
         }
     }
     /**
@@ -587,7 +585,7 @@ open class TaskQueue: Hashable {
     public func wait(timeout: DispatchTime) -> DispatchTimeoutResult {
         var results = [DispatchTimeoutResult]()
 
-        for (_, group) in _groups {
+        for (_, group) in _groupsQueue.sync(execute: { return _groups }) {
             results.append(group.wait(timeout: timeout))
         }
 
@@ -605,7 +603,7 @@ open class TaskQueue: Hashable {
     public func wait(wallTimeout timeout: DispatchWallTime) -> DispatchTimeoutResult {
         var results = [DispatchTimeoutResult]()
 
-        for (_, group) in _groups {
+        for (_, group) in _groupsQueue.sync(execute: { return _groups }) {
             results.append(group.wait(wallTimeout: timeout))
         }
 

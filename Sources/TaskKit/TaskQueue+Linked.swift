@@ -200,15 +200,16 @@ open class LinkedTaskQueue: TaskQueue {
                             }
                         }
 
-                        guard let group = linkedQueues[index]._groups[dep.id] else { continue }
-                        groups.append(group)
+                        let group = linkedQueues[index]._groupsQueue.sync { return linkedQueues[index]._groups[dep.id] }
+                        guard group != nil else { continue }
+                        groups.append(group!)
                     } else if tasks.index(where: { $0.id == dep.id }) != nil {
                         if changed {
                             _tasksQueue.async(flags: .barrier) {
                                 type(of: self).sort(&self.tasks)
                             }
                         }
-                        guard let group = _groups[dep.id] else { continue }
+                        guard let group = _groupsQueue.sync(execute: { return _groups[dep.id] }) else { continue }
                         groups.append(group)
                     } else {
                         fatalError("Could not find dependency task \(dep) in any of the linked queues. Task \(task) will never be able to execute!")
