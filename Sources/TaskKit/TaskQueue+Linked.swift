@@ -4,12 +4,12 @@ import Dispatch
 /// A class very similar to a TaskQueue, except this queue makes the assumption that any dependent tasks are added to either this queue or one of the linked queues
 open class LinkedTaskQueue: TaskQueue {
     public private(set) var linkedQueues: Set<LinkedTaskQueue> = Set()
-    private let _linkedQueuesQueue = DispatchQueue(label: "com.TaskKit.linked", qos: .utility)
+    private let _linkedQueuesQueue = DispatchQueue(label: "com.TaskKit.linked", qos: .userInitiated, attributes: .concurrent)
 
     public var dependentTaskOptions: DependentTaskOption = []
 
     private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
-    private var _waitingForDependencyQueue = DispatchQueue(label: "com.TaskKit.waiting", qos: .utility)
+    private var _waitingForDependencyQueue = DispatchQueue(label: "com.TaskKit.waiting", qos: .userInitiated, attributes: .concurrent)
 
     private static let _waitingStates: [TaskState] = [.ready, .currently(.waiting)]
     override public var waiting: [Task] {
@@ -87,23 +87,29 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     public func addLink(to queue: LinkedTaskQueue) {
-        _linkedQueuesQueue.sync {
-            linkedQueues.insert(queue)
-        }
+        _linkedQueuesQueue.async(flags: .barrier) {
+            self.linkedQueues.insert(queue)
 
-        if !queue.linkedQueues.contains(self) {
-            queue.addLink(to: self)
+            let hasLink: Bool = queue._linkedQueuesQueue.sync {
+                return queue.linkedQueues.contains(self)
+            }
+            if !hasLink {
+                queue.addLink(to: self)
+            }
         }
     }
 
     public func addLinks(to queues: [LinkedTaskQueue]) {
-        _linkedQueuesQueue.sync {
-            linkedQueues.formUnion(queues)
-        }
+        _linkedQueuesQueue.async(flags: .barrier) {
+            self.linkedQueues.formUnion(queues)
 
-        queues.forEach { queue in
-            if !queue.linkedQueues.contains(self) {
-                queue.addLink(to: self)
+            queues.forEach { queue in
+                let hasLink: Bool = queue._linkedQueuesQueue.sync {
+                    return queue.linkedQueues.contains(self)
+                }
+                if !hasLink {
+                    queue.addLink(to: self)
+                }
             }
         }
     }
@@ -147,19 +153,19 @@ open class LinkedTaskQueue: TaskQueue {
     private func find(task: Task) -> SetIndex<LinkedTaskQueue>? {
         var index: SetIndex<LinkedTaskQueue>? = nil
 
-        for queue in linkedQueues {
-            var breakOut = false
-            _linkedQueuesQueue.sync {
-                queue._tasksQueue.sync {
+        _linkedQueuesQueue.sync {
+            for queue in linkedQueues {
+                let breakOut: Bool = queue._tasksQueue.sync {
                     if queue.tasks.first(where: { $0.id == task.id }) != nil {
                         index = linkedQueues.index(of: queue)
-                        breakOut = true
+                        return true
                     }
+                    return false
                 }
+                guard !breakOut else { break }
             }
-
-            guard !breakOut else { break }
         }
+
         return index
     }
 
@@ -189,8 +195,8 @@ open class LinkedTaskQueue: TaskQueue {
 
                     if let index = find(task: dep) {
                         if changed {
-                            linkedQueues[index]._tasksQueue.sync {
-                                type(of: self).sort(&linkedQueues[index].tasks)
+                            linkedQueues[index]._tasksQueue.async(flags: .barrier) {
+                                type(of: self).sort(&self.linkedQueues[index].tasks)
                             }
                         }
 
@@ -198,8 +204,8 @@ open class LinkedTaskQueue: TaskQueue {
                         groups.append(group)
                     } else if tasks.index(where: { $0.id == dep.id }) != nil {
                         if changed {
-                            _tasksQueue.sync {
-                                type(of: self).sort(&tasks)
+                            _tasksQueue.async(flags: .barrier) {
+                                type(of: self).sort(&self.tasks)
                             }
                         }
                         guard let group = _groups[dep.id] else { continue }
@@ -211,8 +217,8 @@ open class LinkedTaskQueue: TaskQueue {
             }
 
             task.state = .currently(.waiting)
-            _waitingForDependencyQueue.sync {
-                _waitingForDependency[task.id] = groups
+            _waitingForDependencyQueue.async(flags: .barrier) {
+                self._waitingForDependency[task.id] = groups
             }
             self._getNext = true
             return nil
@@ -233,7 +239,7 @@ open class LinkedTaskQueue: TaskQueue {
             upNext = ready
         } else { return }
 
-        if let groups = _waitingForDependency[upNext.id] {
+        if let groups: [DispatchGroup] = _waitingForDependencyQueue.sync(execute: { return _waitingForDependency[upNext.id] }) {
             queue.async(qos: .background) {
                 for group in groups {
                     group.wait()
@@ -242,8 +248,8 @@ open class LinkedTaskQueue: TaskQueue {
                 self._getNext = true
             }
 
-            _waitingForDependencyQueue.sync {
-                _waitingForDependency.removeValue(forKey: upNext.id)
+            _waitingForDependencyQueue.async(flags: .barrier) {
+                self._waitingForDependency.removeValue(forKey: upNext.id)
             }
 
             return

@@ -16,7 +16,7 @@ open class TaskQueue: Hashable {
     /// The tasks that are/have been executed
     public internal(set) var tasks: [Task] = []
     /// A semaphore to use for preventing simultaneous write access to the array
-    var _tasksQueue = DispatchQueue(label: "com.TaskKit.tasks", qos: .utility)
+    var _tasksQueue = DispatchQueue(label: "com.TaskKit.tasks", qos: .userInteractive, attributes: .concurrent)
 
     public var waiting: [Task] {
         return _tasksQueue.sync {
@@ -151,7 +151,7 @@ open class TaskQueue: Hashable {
     /// The underlying DispatchGroups that tasks are added to when running
     var _groups: [UUID: DispatchGroup] = [:]
     /// A semaphore to use for preventing simultaneous access to the _groups dictionary
-    private var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups", qos: .utility)
+    private var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups", qos: .utility, attributes: .concurrent)
 
     /// When set to true, will grab the next task and begin executing it
     private var __getNext: Bool = false
@@ -160,18 +160,18 @@ open class TaskQueue: Hashable {
         set {
             if newValue {
                 _getNextQueue.sync {
-                    __getNextQueue.sync {
-                        __getNext = newValue
+                    __getNextQueue.async(flags: .barrier) {
+                        self.__getNext = newValue
                     }
 
                     if upNext != nil {
-                        queue.async(qos: .background) {
+                        queue.async(qos: .userInteractive) {
                             self.startNext()
                             self._getNext = false
                         }
                     } else {
-                        __getNextQueue.sync {
-                            __getNext = false
+                        __getNextQueue.async(flags: .barrier) {
+                            self.__getNext = false
                         }
                     }
                 }
@@ -182,9 +182,9 @@ open class TaskQueue: Hashable {
     }
 
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
-    private var _getNextQueue = DispatchQueue(label: "com.TaskKit.next", qos: .utility)
+    private var _getNextQueue = DispatchQueue(label: "com.TaskKit.next", qos: .userInitiated)
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
-    private var __getNextQueue = DispatchQueue(label: "com.TaskKit._next", qos: .utility)
+    private var __getNextQueue = DispatchQueue(label: "com.TaskKit._next", qos: .userInteractive, attributes: .concurrent)
 
     /// The default number of tasks that can run simultaneously
     public static let defaultMaxSimultaneous: Int = 1
@@ -247,11 +247,11 @@ open class TaskQueue: Hashable {
     - Parameter task: The task to add
     */
     public func addTask(_ task: Task) {
-        _tasksQueue.sync {
-            guard tasks.index(where: { $0.id == task.id }) == nil else { return }
-            tasks.append(task)
-            type(of: self).sort(&tasks)
-            queue.async(qos: .background) {
+        _tasksQueue.async(flags: .barrier) {
+            guard self.tasks.index(where: { $0.id == task.id }) == nil else { return }
+            self.tasks.append(task)
+            type(of: self).sort(&self.tasks)
+            self.queue.async(qos: .userInteractive) {
                 if self._isActive && !self._getNext && self._active < self.maxSimultaneous {
                     self._getNext = true
                 }
@@ -265,7 +265,7 @@ open class TaskQueue: Hashable {
     - Parameter tasks: The tasks to add
     */
     public func addTasks(_ tasks: [Task]) {
-        _tasksQueue.sync {
+        _tasksQueue.async(flags: .barrier) {
             let new: [Task] = tasks.compactMap { task in
                 guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
                 return task
@@ -273,7 +273,7 @@ open class TaskQueue: Hashable {
 
             self.tasks += new
             type(of: self).sort(&self.tasks)
-            queue.async(qos: .background) {
+            self.queue.async(qos: .userInteractive) {
                 if self._isActive && !self._getNext && self._active < self.maxSimultaneous {
                     self._getNext = true
                 }
