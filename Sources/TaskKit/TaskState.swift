@@ -1,10 +1,10 @@
 public enum TaskState: CustomStringConvertible, Equatable, Comparable {
-    private var rawValue: UInt16 {
+    private var rawValue: UInt {
         switch self {
-        case .failed(let state): return state.rawValue << 1
-        case .dependency(let task): return task.state.rawValue << 2
-        case .currently(let state): return state.rawValue << 4
-        case .done(let state): return state.rawValue << 8
+        case .failed(let state): return state.rawValue << 4
+        case .dependency(let task): return task.state.rawValue << 8
+        case .currently(let state): return state.rawValue << 12
+        case .done(let state): return state.rawValue << 16
         case .cancelling: return 1
         case .ready: return 2
         case .pausing: return 3

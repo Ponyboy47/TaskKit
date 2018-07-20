@@ -121,19 +121,13 @@ public extension DependentTask {
     }
 
     public var incompleteDependencies: [Task] {
-        return dependencies.filter { task in
-            switch task.state {
-            case .done(.executing): return false
-            default: return true
-            }
+        return dependencies.filter {
+            return $0.state != .succeeded
         }
     }
     var upNext: Task? {
-        return dependencies.first(where: { task in
-            switch task.state {
-            case .done(.executing): return false
-            default: return true
-            }
+        return dependencies.first(where: {
+            return $0.state != .succeeded
         })
     }
 }

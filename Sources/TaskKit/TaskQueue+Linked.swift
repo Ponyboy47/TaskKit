@@ -169,51 +169,54 @@ open class LinkedTaskQueue: TaskQueue {
         return index
     }
 
+    private static let failingStates: [TaskState] = [.done(.cancelling), .currently(.cancelling)]
     override func prepare(_ task: DependentTask) -> Task? {
         task.state = .currently(.preparing)
 
-        guard task.incompleteDependencies.isEmpty else {
+        let incompleteDependencies = task.incompleteDependencies
+        guard incompleteDependencies.isEmpty else {
             var groups: [DispatchGroup] = []
-            for dep in task.incompleteDependencies {
-                switch dep.state {
-                case .failed, .done(.cancelling), .currently(.cancelling):
+
+            for dep in incompleteDependencies {
+                guard !LinkedTaskQueue.failingStates.contains(dep.state) else {
                     task.state = .dependency(dep)
                     failed(task)
                     return nil
-                default:
-                    var changed = false
-                    if dependentTaskOptions.contains(.increaseDependencyPriority) {
-                        changed = dep.priority.increase()
-                    }
-                    if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
-                        if changed {
-                            task.priority.decrease()
-                        } else {
-                            changed = task.priority.decrease()
+                }
+                if case .failed = dep.state {
+                    task.state = .dependency(dep)
+                    failed(task)
+                    return nil
+                }
+
+                var changed = false
+                if dependentTaskOptions.contains(.increaseDependencyPriority) {
+                    changed = dep.priority.increase()
+                }
+                if dependentTaskOptions.contains(.decreaseDependentTaskPriority) {
+                    changed = task.priority.decrease() || changed
+                }
+
+                if let index = find(task: dep) {
+                    if changed {
+                        linkedQueues[index]._tasksQueue.async(flags: .barrier) {
+                            type(of: self).sort(&self.linkedQueues[index].tasks)
                         }
                     }
 
-                    if let index = find(task: dep) {
-                        if changed {
-                            linkedQueues[index]._tasksQueue.async(flags: .barrier) {
-                                type(of: self).sort(&self.linkedQueues[index].tasks)
-                            }
+                    let group = linkedQueues[index]._groupsQueue.sync { return linkedQueues[index]._groups[dep.id] }
+                    guard group != nil else { continue }
+                    groups.append(group!)
+                } else if tasks.index(where: { $0.id == dep.id }) != nil {
+                    if changed {
+                        _tasksQueue.async(flags: .barrier) {
+                            type(of: self).sort(&self.tasks)
                         }
-
-                        let group = linkedQueues[index]._groupsQueue.sync { return linkedQueues[index]._groups[dep.id] }
-                        guard group != nil else { continue }
-                        groups.append(group!)
-                    } else if tasks.index(where: { $0.id == dep.id }) != nil {
-                        if changed {
-                            _tasksQueue.async(flags: .barrier) {
-                                type(of: self).sort(&self.tasks)
-                            }
-                        }
-                        guard let group = _groupsQueue.sync(execute: { return _groups[dep.id] }) else { continue }
-                        groups.append(group)
-                    } else {
-                        fatalError("Could not find dependency task \(dep) in any of the linked queues. Task \(task) will never be able to execute!")
                     }
+                    guard let group = _groupsQueue.sync(execute: { return _groups[dep.id] }) else { continue }
+                    groups.append(group)
+                } else {
+                    fatalError("Could not find dependency task \(dep) in any of the linked queues. Task \(task) will never be able to execute!")
                 }
             }
 
@@ -241,7 +244,7 @@ open class LinkedTaskQueue: TaskQueue {
         } else { return }
 
         if let groups: [DispatchGroup] = _waitingForDependencyQueue.sync(execute: { return _waitingForDependency[upNext.id] }) {
-            queue.async(qos: .background) {
+            DispatchQueue.global(qos: .unspecified).async {
                 for group in groups {
                     group.wait()
                 }
