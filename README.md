@@ -7,7 +7,7 @@ So I built this! I tried to make it equally thread-safe with similar APIs, but m
 ## Installation (SPM)
 Add this to your Package.swift
 ```swift
-.package(url: "https://github.com/Ponyboy47/TaskKit.git", from: "0.4.9")
+.package(url: "https://github.com/Ponyboy47/TaskKit.git", from: "0.4.10")
 ```
 
 ## The Task Protocols
