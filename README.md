@@ -147,5 +147,12 @@ conversionQueue.start()
 ```
 NOTE: Any dependency tasks must exist in one of the linked queues or there will be a fatal error
 
+## TODO
+
+- [ ] Investigate ARC best-practices and see if memory usage/performance/correctness can be improved
+  - https://docs.swift.org/swift-book/LanguageGuide/AutomaticReferenceCounting.html
+- [ ] Investigate improved Hashable conformances
+  - https://developer.apple.com/documentation/swift/adopting_common_protocols
+
 ## License
 MIT
