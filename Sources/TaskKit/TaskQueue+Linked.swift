@@ -20,7 +20,7 @@ open class LinkedTaskQueue: TaskQueue {
         }
     }
     override var upNext: Task? {
-		return _tasksQueue.sync {
+        return _tasksQueue.sync {
             return tasks.first(where: {
                 return LinkedTaskQueue._waitingStates.contains($0.state)
             })
