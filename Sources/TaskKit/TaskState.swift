@@ -1,69 +1,183 @@
-public enum TaskState: CustomStringConvertible, Equatable, Comparable {
-    private var rawValue: UInt {
-        switch self {
-        case .failed(let state): return state.rawValue << 4
-        case .dependency(let task): return task.state.rawValue << 8
-        case .currently(let state): return state.rawValue << 12
-        case .done(let state): return state.rawValue << 16
-        case .cancelling: return 1
-        case .ready: return 2
-        case .pausing: return 3
-        case .beginning: return 4
-        case .preparing: return 5
-        case .waiting: return 6
-        case .configuring: return 7
-        case .resuming: return 8
-        case .executing: return 9
-        }
+import Foundation
+
+public struct TaskState: RawRepresentable, ExpressibleByIntegerLiteral, Equatable {
+    public typealias IntegerLiteralType = UInt16
+
+    public private(set) var rawValue: UInt16
+    let id: UUID = UUID()
+
+    public static let ready: TaskState       = 0b0000_00000_0000001
+    static let prepare: TaskState            = 0b0000_00000_0000010
+    static let configure: TaskState          = 0b0000_00000_0000100
+    static let execute: TaskState            = 0b0000_00000_0001000
+    static let pause: TaskState              = 0b0000_00000_0010000
+    static let cancel: TaskState             = 0b0000_00000_0100000
+    static let resume: TaskState             = 0b0000_00000_1000000
+    private static let mask: TaskState       = 0b0000_00000_1111111
+
+    static let start: TaskState              = 0b0000_00001_0000000
+    static let fail: TaskState               = 0b0000_00010_0000000
+    static let done: TaskState               = 0b0000_00100_0000000
+    static let wait: TaskState               = 0b0000_01000_0000000
+    static let dependency: TaskState         = 0b0000_11000_0000000
+
+    public static let succeeded = TaskState(rawValue: .done | .execute)
+    static let waited = TaskState(rawValue: .done | .wait)
+
+    public var isReady: Bool {
+        return self == .ready
+    }
+    public var isStarted: Bool {
+        return contains(.start)
+    }
+    public var isDone: Bool {
+        return contains(.done)
+    }
+    public var didFail: Bool {
+        return contains(.fail)
+    }
+    public var didSucceed: Bool {
+        return self == .succeeded
+    }
+    public var isWaiting: Bool {
+        return contains(.wait)
+    }
+    public var isPaused: Bool {
+        return isDone && contains(.pause)
+    }
+    public var wasCancelled: Bool {
+        return isDone && contains(.cancel)
+    }
+    public var isExecuting: Bool {
+        return isStarted && contains(.execute)
     }
 
-    case ready
-    case beginning
-    case preparing
-    case configuring
-    case executing
-    case cancelling
-    case resuming
-    case pausing
-    case waiting
-    indirect case done(TaskState)
-    indirect case currently(TaskState)
-    indirect case dependency(Task)
-    indirect case failed(TaskState)
+    public func hasStarted(to state: TaskState) -> Bool {
+        precondition(state.isRaw)
 
-    public static let running: TaskState = .currently(.executing)
-    public static let paused: TaskState = .done(.pausing)
-    public static let cancelled: TaskState = .done(.cancelling)
-    public static let succeeded: TaskState = .done(.executing)
-    public static let prepared: TaskState = .done(.preparing)
-    public static let configured: TaskState = .done(.configuring)
-    public static let waited: TaskState = .done(.waiting)
+        return isStarted && contains(state)
+    }
+    public func hasFinished(_ state: TaskState) -> Bool {
+        precondition(state.isRaw)
 
-    public var description: String {
-        switch self {
-        case .ready: return "ready"
-        case .beginning: return "beginning"
-        case .preparing: return "preparing"
-        case .configuring: return "configuring"
-        case .executing: return "executing"
-        case .cancelling: return "cancelling"
-        case .resuming: return "resuming"
-        case .pausing: return "pausing"
-        case .waiting: return "waiting"
-        case .currently(.executing): return "running"
-        case .currently(let state): return "currently(\(state))"
-        case .done(.executing): return "succeeded"
-        case .done(let state): return "done(\(state))"
-        case .failed(let state): return "failed(\(state))"
-        case .dependency(let task): return "dependency(\(task), state: \(task.status.state))"
-        }
+        return isDone && contains(state)
+    }
+    public func isWaiting(to state: TaskState) -> Bool {
+        precondition(state.isRaw)
+
+        return isWaiting && contains(state)
+    }
+
+    private var isRaw: Bool {
+        return rawState == self
+    }
+    private var rawState: UInt16 {
+        return rawValue & TaskState.mask
+    }
+
+    public init(rawValue: UInt16) {
+        self.rawValue = rawValue
+    }
+
+    public init(integerLiteral value: UInt16) {
+        rawValue = value
+    }
+
+    mutating func start(to state: TaskState) {
+        rawValue = state.rawState | .start
+    }
+
+    mutating func start() {
+        precondition(isReady)
+
+        rawValue = rawState | TaskState.start
+    }
+
+    mutating func finish() {
+        precondition(isStarted)
+
+        rawValue = rawState | .done
+    }
+
+    mutating func fail() {
+        precondition(isStarted)
+
+        rawValue = rawState | .done
+    }
+
+    mutating func wait(to state: TaskState) {
+        rawValue = state.rawState | .wait
+    }
+
+    mutating func pause() {
+        precondition(isExecuting)
+
+        rawValue = rawState | .pause
+    }
+
+    mutating func cancel() {
+        precondition(isExecuting)
+
+        rawValue = rawState | .cancel
+    }
+
+    mutating func dependency() {
+        rawValue |= .dependency
+    }
+
+    public func contains(_ state: TaskState) -> Bool {
+        return (rawValue & state) == state
     }
 
     public static func == (lhs: TaskState, rhs: TaskState) -> Bool {
         return lhs.rawValue == rhs.rawValue
     }
+    public static func == (lhs: UInt16, rhs: TaskState) -> Bool {
+        return lhs == rhs.rawValue
+    }
+    public static func == (lhs: TaskState, rhs: UInt16) -> Bool {
+        return lhs.rawValue == rhs
+    }
 
-    public static func < (lhs: TaskState, rhs: TaskState) -> Bool {
-        return lhs.rawValue < rhs.rawValue
+    public static func & (lhs: TaskState, rhs: TaskState) -> UInt16 {
+        return lhs.rawValue & rhs.rawValue
+    }
+    public static func & (lhs: UInt16, rhs: TaskState) -> UInt16 {
+        return lhs & rhs.rawValue
+    }
+    public static func & (lhs: TaskState, rhs: UInt16) -> UInt16 {
+        return lhs.rawValue & rhs
+    }
+    public static func &= (lhs: inout TaskState, rhs: TaskState) {
+        lhs.rawValue = lhs & rhs.rawValue
+    }
+    public static func &= (lhs: inout UInt16, rhs: TaskState) {
+        lhs = lhs & rhs.rawValue
+    }
+    public static func &= (lhs: inout TaskState, rhs: UInt16) {
+        lhs.rawValue = lhs & rhs
+    }
+
+    public static func | (lhs: TaskState, rhs: TaskState) -> UInt16 {
+        return lhs.rawValue | rhs.rawValue
+    }
+    public static func | (lhs: UInt16, rhs: TaskState) -> UInt16 {
+        return lhs | rhs.rawValue
+    }
+    public static func | (lhs: TaskState, rhs: UInt16) -> UInt16 {
+        return lhs.rawValue | rhs
+    }
+    public static func |= (lhs: inout TaskState, rhs: TaskState) {
+        lhs.rawValue = lhs | rhs.rawValue
+    }
+    public static func |= (lhs: inout UInt16, rhs: TaskState) {
+        lhs = lhs | rhs.rawValue
+    }
+    public static func |= (lhs: inout TaskState, rhs: UInt16) {
+        lhs.rawValue = lhs | rhs
+    }
+
+    public static prefix func ~ (state: TaskState) -> UInt16 {
+        return ~state.rawValue
     }
 }

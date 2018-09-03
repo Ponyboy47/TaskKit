@@ -2,14 +2,11 @@ import Dispatch
 import Foundation
 
 public protocol Task: class {
-    /// The current execution status of the task
-    var status: TaskStatus { get }
+    var state: TaskState { get set }
     /// How important is it that this task be run sooner rather than later (Tasks with higher priority are executed first)
     var priority: TaskPriority { get set }
     /// The Dispatch Quality of Service the task should use to execute
     var qos: DispatchQoS { get }
-    /// A block to execute once the task finishes
-    var completionBlock: (TaskStatus) -> Void { get }
 
     /**
     The code that will be ran when your task is performed
@@ -17,53 +14,22 @@ public protocol Task: class {
     - Returns: Whether or not the task finished execution successfully
     */
     func execute() -> Bool
-    func main() -> Bool
+
+    func finish()
 }
 
 private let _taskStateQueue = DispatchQueue(label: "com.TaskKit.task.state", qos: .userInteractive, attributes: .concurrent)
 
 public extension Task {
-    public var id: UUID { return status.id }
-    public var state: TaskState {
-        get { return _taskStateQueue.sync { return status.state } }
-        set { _taskStateQueue.async(flags: .barrier) { self.status.state = newValue } }
-    }
+    public var isReady: Bool { return state.isReady }
+    public var isExecuting: Bool { return state.isExecuting }
+    public var isWaiting: Bool { return state.isWaiting }
+    public var isPaused: Bool { return state.isPaused }
+    public var wasCancelled: Bool { return state.wasCancelled }
+    public var didSucceed: Bool { return state.didSucceed }
+    public var didFail: Bool { return state.didFail }
 
-    /**
-    Appends a new log message to the status
-
-    - Parameter message: The message to add
-    */
-    public func append(_ message: String) {
-        status.append(message)
-    }
-
-    /**
-    Splits the message based on a delimeter and appends the array of messages to the messages array
-
-    - Parameter message: The message to split and add
-    */
-    public func append(_ message: String, separatedBy delimeter: String) {
-        status.append(message, separatedBy: delimeter)
-    }
-
-    /**
-    Appends an array of messages to the messages array
-
-    - Parameter message: The messages to add
-    */
-    public func append(_ messages: [String]) {
-        status.append(messages)
-    }
-
-    /**
-    Appends a variadic of messages to the messages array
-
-    - Parameter message: The messages to add
-    */
-    public func append(_ messages: String...) {
-        status.append(messages)
-    }
+    var id: UUID { return state.id }
 
     @available(*, renamed: "execute")
     public func main() -> Bool { return execute() }
@@ -108,26 +74,22 @@ public protocol DependentTask: Task {
     var dependencies: [Task] { get set }
 
     /// A block that will be executed when each dependency finishes executing
-    var dependencyCompletionBlock: (Task) -> Void { get }
+    func finish(dependency: Task)
 }
 
 public extension DependentTask {
-    public func addDependency(_ task: Task) {
-        dependencies.append(task)
-    }
-
     public func add(dependency task: Task) {
         dependencies.append(task)
     }
 
-    public var incompleteDependencies: [Task] {
+    var incompleteDependencies: [Task] {
         return dependencies.filter {
-            return $0.state != .succeeded
+            return !$0.state.didSucceed
         }
     }
     var upNext: Task? {
         return dependencies.first(where: {
-            return $0.state != .succeeded
+            return !$0.state.didSucceed && !$0.state.didFail
         })
     }
 }

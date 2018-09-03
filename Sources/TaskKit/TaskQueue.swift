@@ -21,23 +21,24 @@ open class TaskQueue: Hashable {
     public var waiting: [Task] {
         return _tasksQueue.sync {
             return tasks.filter {
-                return $0.state == .ready
+                return $0.isReady
             }
         }
     }
     var upNext: Task? {
         return _tasksQueue.sync {
             return tasks.first(where: {
-                return $0.state == .ready
+                return $0.isReady
             })
         }
     }
 
     private static let beginningStates: [TaskState] = {
-        let currently: [TaskState] = [.beginning, .preparing, .configuring].map({ return .currently($0) })
-        let done: [TaskState] = [.beginning, .preparing, .configuring].map({ return .done($0) })
+        let waiting: [TaskState] = [TaskState(rawValue: .wait | .execute)]
+        let active: [TaskState] = [.prepare, .configure].map { TaskState(rawValue: $0 | TaskState.start) }
+        let done: [TaskState] = [.prepare, .configure].map { TaskState(rawValue: $0 | TaskState.done) }
 
-        return currently + done
+        return waiting + active + done
     }()
     public var beginning: [Task] {
         return _tasksQueue.sync {
@@ -48,7 +49,7 @@ open class TaskQueue: Hashable {
     }
 
     private static let runningStates: [TaskState] = {
-        return [.executing, .pausing, .cancelling].map({ return .currently($0) })
+        return [.execute, .pause, .cancel].map { TaskState(rawValue: $0 | TaskState.start) }
     }()
     public var running: [Task] {
         return _tasksQueue.sync {
@@ -61,10 +62,7 @@ open class TaskQueue: Hashable {
     public var failed: [Task] {
         return _tasksQueue.sync {
             return tasks.filter {
-                switch $0.state {
-                case .failed: return true
-                default: return false
-                }
+                return $0.didFail
             }
         }
     }
@@ -72,7 +70,7 @@ open class TaskQueue: Hashable {
     public var succeeded: [Task] {
         return _tasksQueue.sync {
             return tasks.filter {
-                return $0.state == .succeeded
+                $0.didSucceed
             }
         }
     }
@@ -80,7 +78,7 @@ open class TaskQueue: Hashable {
     public var paused: [Task] {
         return _tasksQueue.sync {
             return tasks.filter {
-                return $0.state == .paused
+                return $0.isPaused
             }
         }
     }
@@ -88,14 +86,10 @@ open class TaskQueue: Hashable {
     public var cancelled: [Task] {
         return _tasksQueue.sync {
             return tasks.filter {
-                return $0.state == .cancelled
+                return $0.wasCancelled
             }
         }
     }
-
-    // NOTE: Calculating the following Ints is implemented as an O(n) operation
-    // curretnly. It used to use the above calculated vars, which would have
-    // been worse than O(n)
 
     static let _activeStates: [TaskState] = {
         return TaskQueue.beginningStates + TaskQueue.runningStates
@@ -124,7 +118,7 @@ open class TaskQueue: Hashable {
     public var remaining: Int {
         return _tasksQueue.sync {
             return tasks.reduce(0) {
-                if $1.state == .ready {
+                if $1.state.isReady {
                     return $0 + 1
                 } else if TaskQueue._activeStates.contains($1.state) {
                     return $0 + 1
@@ -177,6 +171,10 @@ open class TaskQueue: Hashable {
                 }
             } else if _active < maxSimultaneous {
                 self._getNext = true
+            } else {
+                __getNextQueue.async(flags: .barrier) {
+                    self.__getNext = false
+                }
             }
         }
     }
@@ -248,7 +246,6 @@ open class TaskQueue: Hashable {
     */
     public func addTask(_ task: Task) {
         _tasksQueue.async(flags: .barrier) {
-            guard self.tasks.index(where: { $0.id == task.id }) == nil else { return }
             self.tasks.append(task)
             type(of: self).sort(&self.tasks)
             self.queue.async(qos: .userInteractive) {
@@ -266,12 +263,7 @@ open class TaskQueue: Hashable {
     */
     public func addTasks(_ tasks: [Task]) {
         _tasksQueue.async(flags: .barrier) {
-            let new: [Task] = tasks.compactMap { task in
-                guard self.tasks.index(where: { $0.id == task.id }) == nil else { return nil }
-                return task
-            }
-
-            self.tasks += new
+            self.tasks += tasks
             type(of: self).sort(&self.tasks)
             self.queue.async(qos: .userInteractive) {
                 if self._isActive && !self._getNext && self._active < self.maxSimultaneous {
@@ -341,10 +333,9 @@ open class TaskQueue: Hashable {
     - Returns: The task, if it was configured properly, or nil otherwise
     */
     func prepare(_ task: DependentTask) -> Task? {
-        task.state = .currently(.preparing)
-
         var dependency: Task? = nil
         while let dep = task.upNext {
+            task.state.dependency()
             start(dep, autostart: false, dependent: task)
             _groupsQueue.sync { _groups[dep.id]!.wait() }
 
@@ -353,12 +344,11 @@ open class TaskQueue: Hashable {
         }
 
         guard dependency == nil else {
-            task.state = .dependency(dependency!)
             failed(task)
             return nil
         }
 
-        task.state = .prepared
+        task.state.finish()
         return task
     }
 
@@ -370,13 +360,13 @@ open class TaskQueue: Hashable {
     - Returns: The task, if it was configured properly, or nil otherwise
     */
     private func configure(_ task: ConfigurableTask) -> Task? {
-        task.state = .currently(.configuring)
+        task.state.start(to: .configure)
         guard task.configure() else {
             failed(task)
             return nil
         }
 
-        task.state = .configured
+        task.state.finish()
         return task
     }
 
@@ -388,14 +378,14 @@ open class TaskQueue: Hashable {
     - Returns: Whether or not the task executed successfully
     */
     private func execute(_ task: Task) -> Bool {
-        task.state = .running
+        task.state.start(to: .execute)
 
         guard task.execute() else {
             failed(task)
             return false
         }
 
-        task.state = .succeeded
+        task.state.finish()
         return true
     }
 
@@ -406,13 +396,8 @@ open class TaskQueue: Hashable {
     - Parameter task: The task to configure
     */
     func failed(_ task: Task) {
-        let state = task.state
-        switch state {
-        case .dependency: task.state = .failed(state)
-        case .currently(let current): task.state = .failed(current)
-        default:
-            fatalError("We can only fail on a dependency or on states that are currently running. Something went awry and \(task) failed during a supposedly impossible state. \(state)")
-        }
+        precondition(task.state.isStarted || task.state.contains(.dependency))
+        task.state.fail()
     }
 
     /// Begins execution of the next task in the waiting list
@@ -432,7 +417,8 @@ open class TaskQueue: Hashable {
     - Parameter autostart: Whether or not the current task should automatically start the next task in the waiting array upon completion
     */
     func start(_ task: Task, autostart: Bool = true, dependent: DependentTask? = nil) {
-        task.state = .currently(.beginning)
+        task.state.start(to: .prepare)
+
         let group = DispatchGroup()
 
         _groupsQueue.async(flags: .barrier) {
@@ -468,10 +454,10 @@ open class TaskQueue: Hashable {
                 task = self.failed[index]
             } else { return }
 
-            task.completionBlock(task.status)
+            task.finish()
 
             if let dependent = dependent {
-                dependent.dependencyCompletionBlock(task)
+                dependent.finish(dependency: task)
             }
             self._groupsQueue.async(flags: .barrier) {
                 self._groups.removeValue(forKey: uniqueKey)
@@ -496,13 +482,14 @@ open class TaskQueue: Hashable {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
-                task.state = .currently(.resuming)
+                assert(task.isPaused)
+                task.state.start(to: .resume)
                 guard task.resume() else {
                     failed(task as Task)
                     _getNext = true
                     continue
                 }
-                task.state = .running
+                task.state.start(to: .execute)
             }
         }
     }
@@ -523,28 +510,35 @@ open class TaskQueue: Hashable {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is PausableTask {
                 let task: PausableTask! = task as? PausableTask
-                task.state = .currently(.pausing)
+                assert(task.isExecuting)
+                task.state.start(to: .pause)
                 guard task.pause() else {
                     failed(task as Task)
                     continue
                 }
-                task.state = .paused
+                task.state.pause()
             }
         }
     }
 
     /**
-    Cancel execution of all currently running tasks and prevents new tasks from being executed
-    After cancelling, you need to restart the queue with the .start() method
+    Cancel execution of all currently running tasks
 
+    - Parameter pause: Whether or not to prevent execution of any remaining tasks. If true, the queue must be resumed with `.start()`
     - Returns: The tasks that were cancelled. This may be useful to verify your tasks were all successfully cancelled
     */
     @discardableResult
-    public func cancel() -> [Task] {
-        queue.suspend()
-        _isActive = false
+    public func cancel(pause: Bool = false) -> [Task] {
+        if pause {
+            queue.suspend()
+            _isActive = false
+        }
 
         return cancelAllTasks()
+    }
+
+    public func cancelEverything() {
+        while !cancel().isEmpty {}
     }
 
     private func cancelAllTasks() -> [Task] {
@@ -553,13 +547,14 @@ open class TaskQueue: Hashable {
             // Look at stopping the dispatch queue/group for other ones (or both)
             if task is CancellableTask {
                 let task: CancellableTask! = task as? CancellableTask
-                task.state = .currently(.cancelling)
+                assert(task.isExecuting)
+                task.state.start(to: .cancel)
                 guard task.cancel() else {
                     failed(task as Task)
                     continue
                 }
+                task.state.finish()
             }
-            task.state = .cancelled
             cancelled.append(task)
         }
 

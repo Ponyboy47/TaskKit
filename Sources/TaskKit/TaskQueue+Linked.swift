@@ -11,7 +11,7 @@ open class LinkedTaskQueue: TaskQueue {
     private var _waitingForDependency: [UUID: [DispatchGroup]] = [:]
     private var _waitingForDependencyQueue = DispatchQueue(label: "com.TaskKit.waiting", qos: .userInitiated, attributes: .concurrent)
 
-    private static let _waitingStates: [TaskState] = [.ready, .currently(.waiting)]
+    private static let _waitingStates: [TaskState] = [.ready, TaskState(rawValue: .execute | .wait)]
     override public var waiting: [Task] {
         return _tasksQueue.sync {
             return tasks.filter {
@@ -37,7 +37,7 @@ open class LinkedTaskQueue: TaskQueue {
 
     private static let _linkedActiveStates: [TaskState] = {
         var states = LinkedTaskQueue._activeStates
-        states.append(.done(.waiting))
+        states.append(.waited)
         return states
     }()
     override var _active: Int {
@@ -169,22 +169,17 @@ open class LinkedTaskQueue: TaskQueue {
         return index
     }
 
-    private static let failingStates: [TaskState] = [.done(.cancelling), .currently(.cancelling)]
+    private static let failingStates: [TaskState] = {
+        return [.start, .done].map { TaskState(rawValue: $0 | .cancel) }
+    }()
     override func prepare(_ task: DependentTask) -> Task? {
-        task.state = .currently(.preparing)
-
         let incompleteDependencies = task.incompleteDependencies
         guard incompleteDependencies.isEmpty else {
             var groups: [DispatchGroup] = []
 
             for dep in incompleteDependencies {
-                guard !LinkedTaskQueue.failingStates.contains(dep.state) else {
-                    task.state = .dependency(dep)
-                    failed(task)
-                    return nil
-                }
-                if case .failed = dep.state {
-                    task.state = .dependency(dep)
+                task.state.dependency()
+                guard !( dep.didFail || LinkedTaskQueue.failingStates.contains(dep.state)) else {
                     failed(task)
                     return nil
                 }
@@ -220,7 +215,7 @@ open class LinkedTaskQueue: TaskQueue {
                 }
             }
 
-            task.state = .currently(.waiting)
+            task.state.wait(to: .execute)
             _waitingForDependencyQueue.async(flags: .barrier) {
                 self._waitingForDependency[task.id] = groups
             }
@@ -248,7 +243,7 @@ open class LinkedTaskQueue: TaskQueue {
                 for group in groups {
                     group.wait()
                 }
-                upNext.state = .done(.waiting)
+                upNext.state.finish()
                 self._getNext = true
             }
 
@@ -257,7 +252,7 @@ open class LinkedTaskQueue: TaskQueue {
             }
 
             return
-        } else if case .currently(.waiting) = upNext.state { return }
+        } else if upNext.isWaiting { return }
 
         start(upNext)
     }
