@@ -119,7 +119,7 @@ open class LinkedTaskQueue: TaskQueue {
     }
 
     public func addLinks(to queues: Set<LinkedTaskQueue>) {
-        addLinks(to: queues)
+        addLinks(to: Array(queues))
     }
 
     public func add(link queue: LinkedTaskQueue) {
