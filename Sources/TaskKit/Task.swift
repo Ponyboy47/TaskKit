@@ -30,9 +30,14 @@ public extension Task {
     public var didFail: Bool { return state.didFail }
 
     var id: UUID { return state.id }
+}
 
-    @available(*, renamed: "execute")
-    public func main() -> Bool { return execute() }
+public func == (lhs: Task, rhs: Task) -> Bool {
+    return lhs.id == rhs.id
+}
+
+func == (lhs: Task, rhs: UUID) -> Bool {
+    return lhs.id == rhs
 }
 
 public protocol ConfigurableTask: Task {
@@ -63,10 +68,8 @@ public protocol PausableTask: Task {
 public protocol CancellableTask: Task {
     /**
     Used to cancel execution of your task mid-run
-
-    - Returns: Whether or not the task was successfully cancelled
     */
-    func cancel() -> Bool
+    func cancel()
 }
 
 public protocol DependentTask: Task {

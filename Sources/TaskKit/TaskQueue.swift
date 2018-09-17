@@ -9,14 +9,19 @@ open class TaskQueue: Hashable {
     /// The name of the TaskQueue
     public private(set) var name: String
 
-    public var hashValue: Int {
-        return queue.label.hashValue
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(queue.label)
+        hasher.combine(_tasksQueue.label)
+        hasher.combine(_groupsQueue.label)
+        hasher.combine(_getNextQueue.label)
+        hasher.combine(__getNextQueue.label)
     }
 
     /// The tasks that are/have been executed
     public internal(set) var tasks: [Task] = []
     /// A semaphore to use for preventing simultaneous write access to the array
-    var _tasksQueue = DispatchQueue(label: "com.TaskKit.tasks", qos: .userInteractive, attributes: .concurrent)
+    var _tasksQueue = DispatchQueue(label: "com.TaskKit.tasks.\(UUID())", qos: .userInteractive, attributes: .concurrent)
 
     public var waiting: [Task] {
         return _tasksQueue.sync {
@@ -145,7 +150,7 @@ open class TaskQueue: Hashable {
     /// The underlying DispatchGroups that tasks are added to when running
     var _groups: [UUID: DispatchGroup] = [:]
     /// A semaphore to use for preventing simultaneous access to the _groups dictionary
-    var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups", qos: .utility, attributes: .concurrent)
+    var _groupsQueue = DispatchQueue(label: "com.TaskKit.groups.\(UUID())", qos: .utility, attributes: .concurrent)
 
     /// When set to true, will grab the next task and begin executing it
     private var __getNext: Bool = false
@@ -180,9 +185,9 @@ open class TaskQueue: Hashable {
     }
 
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
-    private var _getNextQueue = DispatchQueue(label: "com.TaskKit.next", qos: .userInitiated)
+    private var _getNextQueue = DispatchQueue(label: "com.TaskKit.next.\(UUID())", qos: .userInitiated)
     /// A semaphore to use for preventing simultaneous access to the _getNext boolean
-    private var __getNextQueue = DispatchQueue(label: "com.TaskKit._next", qos: .userInteractive, attributes: .concurrent)
+    private var __getNextQueue = DispatchQueue(label: "com.TaskKit._next.\(UUID())", qos: .userInteractive, attributes: .concurrent)
 
     /// The default number of tasks that can run simultaneously
     public static let defaultMaxSimultaneous: Int = 1
@@ -199,7 +204,7 @@ open class TaskQueue: Hashable {
         self.maxSimultaneous = maxSimultaneous
 
         // If the queue doesn't run concurrently then this causes issues (especially with dependent tasks)
-        self.queue = DispatchQueue(label: "com.taskqueue.\(UUID().description)", attributes: .concurrent)
+        self.queue = DispatchQueue(label: "com.taskqueue.\(UUID())", attributes: .concurrent)
 
         self.queue.suspend()
     }
@@ -231,12 +236,23 @@ open class TaskQueue: Hashable {
     }
 
     /**
+    Returns the index of where to insert the specified task (may be faster than
+    sorting the entire array on every insert)
+
+    - Parameter task: The task that will be inserted
+    - Returns: The index where the task should be inserted
+    */
+    open func insertIndex(of task: Task) -> Array<Task>.Index? {
+        return tasks.firstIndex(where: { task.priority >= $0.priority })
+    }
+
+    /**
     Sorts the array of Tasks by priority
 
     - Parameter array: The array of tasks to sort in execution order
     */
     class func sort(_ array: inout [Task]) {
-        array.sort { $0.priority > $1.priority }
+        array.sort { $0.priority >= $1.priority }
     }
 
     /**
@@ -244,10 +260,13 @@ open class TaskQueue: Hashable {
 
     - Parameter task: The task to add
     */
-    public func addTask(_ task: Task) {
+    public func add(task: Task) {
         _tasksQueue.async(flags: .barrier) {
-            self.tasks.append(task)
-            type(of: self).sort(&self.tasks)
+            if let index = self.insertIndex(of: task) {
+                self.tasks.insert(task, at: index)
+            } else {
+                self.tasks.append(task)
+            }
             self.queue.async(qos: .userInteractive) {
                 if self._isActive && !self._getNext && self._active < self.maxSimultaneous {
                     self._getNext = true
@@ -261,7 +280,7 @@ open class TaskQueue: Hashable {
 
     - Parameter tasks: The tasks to add
     */
-    public func addTasks(_ tasks: [Task]) {
+    public func add(tasks: [Task]) {
         _tasksQueue.async(flags: .barrier) {
             self.tasks += tasks
             type(of: self).sort(&self.tasks)
@@ -278,35 +297,8 @@ open class TaskQueue: Hashable {
 
     - Parameter tasks: The tasks to add
     */
-    public func addTasks(_ tasks: Task...) {
-        addTasks(tasks)
-    }
-
-    /**
-    Adds a task to the task array, then sorts the task array based on its tasks' priorities
-
-    - Parameter task: The task to add
-    */
-    public func add(task: Task) {
-        addTask(task)
-    }
-
-    /**
-    Adds an array of tasks to the existing task array, then sorts the task array based on its tasks' priorities
-
-    - Parameter tasks: The tasks to add
-    */
-    public func add(tasks: [Task]) {
-        addTasks(tasks)
-    }
-
-    /**
-    Adds a variadic array of tasks to the existing task array, then sorts the task array based on its tasks' priorities
-
-    - Parameter tasks: The tasks to add
-    */
     public func add(tasks: Task...) {
-        addTasks(tasks)
+        add(tasks: tasks)
     }
 
     /// Begin executing the tasks in the waiting array
@@ -339,7 +331,7 @@ open class TaskQueue: Hashable {
             start(dep, autostart: false, dependent: task)
             _groupsQueue.sync { _groups[dep.id]!.wait() }
 
-            dependency = failed.first(where: { $0.id == dep.id })
+            dependency = failed.first(where: { $0 == dep })
             guard dependency == nil else { break }
         }
 
@@ -448,9 +440,9 @@ open class TaskQueue: Hashable {
     private func setupNotify(using group: DispatchGroup, uniqueKey: UUID, autostart: Bool, dependent: DependentTask? = nil) {
         group.notify(qos: queue.qos, queue: queue) {
             let task: Task
-            if let index = self.succeeded.index(where: { $0.id == uniqueKey }) {
+            if let index = self.succeeded.index(where: { $0 == uniqueKey }) {
                 task = self.succeeded[index]
-            } else if let index = self.failed.index(where: { $0.id == uniqueKey }) {
+            } else if let index = self.failed.index(where: { $0 == uniqueKey }) {
                 task = self.failed[index]
             } else { return }
 
@@ -549,10 +541,7 @@ open class TaskQueue: Hashable {
                 let task: CancellableTask! = task as? CancellableTask
                 assert(task.isExecuting)
                 task.state.start(to: .cancel)
-                guard task.cancel() else {
-                    failed(task as Task)
-                    continue
-                }
+                task.cancel()
                 task.state.finish()
             }
             cancelled.append(task)
@@ -658,6 +647,6 @@ open class TaskQueue: Hashable {
     }
 
     public static func == (lhs: TaskQueue, rhs: TaskQueue) -> Bool {
-        return lhs.queue.label == rhs.queue.label && lhs.name == rhs.name
+        return lhs.hashValue == rhs.hashValue
     }
 }

@@ -7,8 +7,9 @@ So I built this! I tried to make it equally thread-safe with similar APIs, but m
 ## Installation (SPM)
 Add this to your Package.swift
 ```swift
-.package(url: "https://github.com/Ponyboy47/TaskKit.git", from: "0.4.10")
+.package(url: "https://github.com/Ponyboy47/TaskKit.git", from: "0.6.0")
 ```
+Supports Swift 4.x (Including 4.2)
 
 ## The Task Protocols
 The basis of TaskKit is (you guessed it) Tasks.
@@ -19,13 +20,13 @@ This is the base protocol that all the subsequent `*Task` protocols also conform
 In order to conform to any `Task` protocol, you must implement the following protocol requirements:<br />
 
 ```swift
-var status: TaskStatus { get set }
+var state: TaskState { get set }
 ```
 This contains information about the current execution progress of the task and may also contain an array of log messages (you would have to add log messages in your object that conforms to `Task`).<br />
 It is recomended that you begin by assigning this to `.ready`, otherwise, be sure that the `status.state` value is `.ready` before your task is added to the TaskQueue or else it will fail to execute.<br /><br />
 
 ```swift
-var priority: TaskPriority { get }
+var priority: TaskPriority { get set }
 ```
 A task's priority determines when it will be executed relative to other tasks in the queue.<br />
 High priority tasks are executed before lower priority tasks.<br /><br />
@@ -36,25 +37,25 @@ var qos: DispatchQoS { get }
 This will be the [Quality of Service](https://developer.apple.com/documentation/dispatch/dispatchqos) that is used to execute your task.<br /><br />
 
 ```swift
-var completionBlock: (TaskStatus) -> Void { get }
+func finish()
 ```
-A closure that will be executed when your task completes, regardless of whether or not it completed successfully.<br />
-The TaskStatus is passed to the completion block so that you can have different logic depending on whether it failed or succeeded.<br /><br />
+A function that will be executed when your task completes, regardless of whether or not it completed successfully.<br />
+Check your task's state so that you can have different logic depending on whether it failed or succeeded.<br /><br />
 
 ```swift
 func execute() -> Bool
 ```
 This is the function that will be called to run your task.<br />
-This function should return true if your task completed its execution successfully, otherwise return false.<br /><br />
+This function should return whether or not your task completed its execution successfully.<br /><br />
 
 ### ConfigurableTask
 A `Task` that depends on some external source to configure itself properly (ie: a script to validate a configuration file before execution).
 
 ```swift
-mutating func configure() -> Bool
+func configure() -> Bool
 ```
-The function that must run successfully before your task can be executed. It is expected that while configuring your task, it will be mutated, otherwise, what is it even configuring?<br />
-This function should return true if it succeeded or false if it failed.<br /><br />
+The function that must run successfully before your task can be executed.<br />
+This function should return whether or not it configured your task properly.<br /><br />
 
 ### PausableTask
 A `Task` that can be stopped mid-execution and resumed at a later time.
@@ -63,22 +64,21 @@ A `Task` that can be stopped mid-execution and resumed at a later time.
 func pause() -> Bool
 ```
 The function used to stop execution.<br />
-Return true if the task is successfully paused, otherwise return false.<br /><br />
+Return whether or not your task's execution was successfully paused.<br /><br />
 
 ```swift
 func resume() -> Bool
 ```
 The function used to resume previously stopped execution.<br />
-Return true if the task is successfully resumed, otherwise return false.<br /><br />
+Return whether or not your task's execution was successfully resumed.<br /><br />
 
 ### CancellableTask
 A `Task` that can be cancelled mid-execution, but cannot (or will not) be resumed at a later time.
 
 ```swift
-func cancel() -> Bool
+func cancel()
 ```
 The function used to cancel execution.<br />
-Return true if the task is sucessfully cancelled, otherwise return false.<br /><br />
 
 ### DependentTask
 A `Task` that cannot be executed until one or more other `Task`s have successfully been executed.
@@ -89,10 +89,10 @@ var dependencies: [Task] { get set }
 An array of the tasks that must execute successfully before this task can begin its execution.<br /><br />
 
 ```swift
-var dependencyCompletionBlock: (Task) -> Void { get }
+func finish(dependency: Task)
 ```
-A closure that is ran whenever a dependency finishes executing.<br />
-The `DependentTask` is passed as the `Task` in the closure.<br /><br />
+A function that is ran whenever a dependency finishes executing.<br />
+The dependency that just completed is passed as the `dependency` parameter.<br /><br />
 
 ## Basic Usage
 
@@ -118,7 +118,7 @@ myTask.add(dependency: dependencyTask)
 queue.add(task: myTask)
 
 // Start the queue
-queue.start
+queue.start()
 ```
 
 ## Linked Queues
@@ -151,7 +151,7 @@ NOTE: Any dependency tasks must exist in one of the linked queues or there will 
 
 - [ ] Investigate ARC best-practices and see if memory usage/performance/correctness can be improved
   - https://docs.swift.org/swift-book/LanguageGuide/AutomaticReferenceCounting.html
-- [ ] Investigate improved Hashable conformances
+- [x] Investigate improved Hashable conformances
   - https://developer.apple.com/documentation/swift/adopting_common_protocols
 
 ## License

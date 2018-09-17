@@ -1,5 +1,7 @@
-public enum TaskPriority: RawRepresentable, Comparable {
-    public var rawValue: UInt8 {
+public enum TaskPriority: RawRepresentable, Comparable, ExpressibleByIntegerLiteral {
+    public typealias IntegerLiteralType = UInt8
+
+    public var rawValue: IntegerLiteralType {
         get {
             switch self {
             case .custom(let value): return value
@@ -11,15 +13,15 @@ public enum TaskPriority: RawRepresentable, Comparable {
             }
         }
         set {
-            if (newValue == TaskPriority.minimal) {
+            if (newValue == .minimal) {
                 self = .minimal
-            } else if (newValue == TaskPriority.low) {
+            } else if (newValue == .low) {
                 self = .low
-            } else if (newValue == TaskPriority.medium) {
+            } else if (newValue == .medium) {
                 self = .medium
-            } else if (newValue == TaskPriority.high) {
+            } else if (newValue == .high) {
                 self = .high
-            } else if (newValue == TaskPriority.critical) {
+            } else if (newValue == .critical) {
                 self = .critical
             } else {
                 self = .custom(newValue)
@@ -32,66 +34,54 @@ public enum TaskPriority: RawRepresentable, Comparable {
     case medium
     case high
     case critical
-    case custom(UInt8)
+    case custom(IntegerLiteralType)
 
-    public init(rawValue: UInt8) {
-        if (rawValue == TaskPriority.minimal) {
+    public init(rawValue: IntegerLiteralType) {
+        if (rawValue == .minimal) {
             self = .minimal
-        } else if (rawValue == TaskPriority.low) {
+        } else if (rawValue == .low) {
             self = .low
-        } else if (rawValue == TaskPriority.medium) {
+        } else if (rawValue == .medium) {
             self = .medium
-        } else if (rawValue == TaskPriority.high) {
+        } else if (rawValue == .high) {
             self = .high
-        } else if (rawValue == TaskPriority.critical) {
+        } else if (rawValue == .critical) {
             self = .critical
         } else {
             self = .custom(rawValue)
         }
     }
 
+    public init(integerLiteral value: IntegerLiteralType) {
+        self.init(rawValue: value)
+    }
+
     @discardableResult
     public mutating func increase() -> Bool {
-        switch self {
-        case .minimal: self = .low
-        case .low: self = .medium
-        case .medium: self = .high
-        case .high: self = .critical
-        case .custom(let value):
-            if value < .low {
-                self = .low
-            } else if value < .medium {
-                self = .medium
-            } else if value < .high {
-                self = .high
-            } else {
-                self = .critical
-            }
-        default: return false
-        }
+        if rawValue < .low {
+            self = .low
+        } else if rawValue < .medium {
+            self = .medium
+        } else if rawValue < .high {
+            self = .high
+        } else if rawValue < .critical {
+            self = .critical
+        } else { return false }
 
         return true
     }
 
     @discardableResult
     public mutating func decrease() -> Bool {
-        switch self {
-        case .low: self = .minimal
-        case .medium: self = .low
-        case .high: self = .medium
-        case .critical: self = .high
-        case .custom(let value):
-            if value > .high {
-                self = .high
-            } else if value > .medium {
-                self = .medium
-            } else if value > .low {
-                self = .low
-            } else {
-                self = .minimal
-            }
-        default: return false
-        }
+        if rawValue > .high {
+            self = .high
+        } else if rawValue > .medium {
+            self = .medium
+        } else if rawValue > .low {
+            self = .low
+        } else if rawValue > .minimal {
+            self = .minimal
+        } else { return false }
 
         return true
     }
@@ -99,37 +89,40 @@ public enum TaskPriority: RawRepresentable, Comparable {
     public static func == (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
         return lhs.rawValue == rhs.rawValue
     }
-    public static func == (lhs: UInt8, rhs: TaskPriority) -> Bool {
-        return lhs == rhs.rawValue
-    }
-    public static func == (lhs: TaskPriority, rhs: UInt8) -> Bool {
+    public static func == (lhs: TaskPriority, rhs: IntegerLiteralType) -> Bool {
         return lhs.rawValue == rhs
     }
 
     public static func < (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
         return lhs.rawValue < rhs.rawValue
     }
-    public static func < (lhs: UInt8, rhs: TaskPriority) -> Bool {
-        return lhs < rhs.rawValue
-    }
-    public static func < (lhs: TaskPriority, rhs: UInt8) -> Bool {
+    public static func < (lhs: TaskPriority, rhs: IntegerLiteralType) -> Bool {
         return lhs.rawValue < rhs
     }
 
     public static func > (lhs: TaskPriority, rhs: TaskPriority) -> Bool {
         return lhs.rawValue > rhs.rawValue
     }
-    public static func > (lhs: UInt8, rhs: TaskPriority) -> Bool {
-        return lhs > rhs.rawValue
-    }
-    public static func > (lhs: TaskPriority, rhs: UInt8) -> Bool {
+    public static func > (lhs: TaskPriority, rhs: IntegerLiteralType) -> Bool {
         return lhs.rawValue > rhs
     }
 
     public static func += (lhs: inout TaskPriority, rhs: TaskPriority) {
         lhs.rawValue += rhs.rawValue
     }
-    public static func += (lhs: inout TaskPriority, rhs: UInt8) {
+    public static func += (lhs: inout TaskPriority, rhs: IntegerLiteralType) {
         lhs.rawValue += rhs
+    }
+}
+
+extension TaskPriority.IntegerLiteralType {
+    public static func == (lhs: TaskPriority.IntegerLiteralType, rhs: TaskPriority) -> Bool {
+        return lhs == rhs.rawValue
+    }
+    public static func > (lhs: TaskPriority.IntegerLiteralType, rhs: TaskPriority) -> Bool {
+        return lhs > rhs.rawValue
+    }
+    public static func < (lhs: TaskPriority.IntegerLiteralType, rhs: TaskPriority) -> Bool {
+        return lhs < rhs.rawValue
     }
 }

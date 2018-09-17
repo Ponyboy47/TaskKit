@@ -3,7 +3,7 @@ import Foundation
 public struct TaskState: RawRepresentable, ExpressibleByIntegerLiteral, Equatable {
     public typealias IntegerLiteralType = UInt16
 
-    public private(set) var rawValue: UInt16
+    public private(set) var rawValue: IntegerLiteralType
     let id: UUID = UUID()
 
     public static let ready: TaskState       = 0b0000_00000_0000001
@@ -71,15 +71,15 @@ public struct TaskState: RawRepresentable, ExpressibleByIntegerLiteral, Equatabl
     private var isRaw: Bool {
         return rawState == self
     }
-    private var rawState: UInt16 {
+    private var rawState: IntegerLiteralType {
         return rawValue & TaskState.mask
     }
 
-    public init(rawValue: UInt16) {
+    public init(rawValue: IntegerLiteralType) {
         self.rawValue = rawValue
     }
 
-    public init(integerLiteral value: UInt16) {
+    public init(integerLiteral value: IntegerLiteralType) {
         rawValue = value
     }
 
@@ -132,52 +132,55 @@ public struct TaskState: RawRepresentable, ExpressibleByIntegerLiteral, Equatabl
     public static func == (lhs: TaskState, rhs: TaskState) -> Bool {
         return lhs.rawValue == rhs.rawValue
     }
-    public static func == (lhs: UInt16, rhs: TaskState) -> Bool {
-        return lhs == rhs.rawValue
-    }
-    public static func == (lhs: TaskState, rhs: UInt16) -> Bool {
+    public static func == (lhs: TaskState, rhs: IntegerLiteralType) -> Bool {
         return lhs.rawValue == rhs
     }
 
-    public static func & (lhs: TaskState, rhs: TaskState) -> UInt16 {
+    public static func & (lhs: TaskState, rhs: TaskState) -> IntegerLiteralType {
         return lhs.rawValue & rhs.rawValue
     }
-    public static func & (lhs: UInt16, rhs: TaskState) -> UInt16 {
-        return lhs & rhs.rawValue
-    }
-    public static func & (lhs: TaskState, rhs: UInt16) -> UInt16 {
+    public static func & (lhs: TaskState, rhs: IntegerLiteralType) -> IntegerLiteralType {
         return lhs.rawValue & rhs
     }
     public static func &= (lhs: inout TaskState, rhs: TaskState) {
         lhs.rawValue = lhs & rhs.rawValue
     }
-    public static func &= (lhs: inout UInt16, rhs: TaskState) {
-        lhs = lhs & rhs.rawValue
-    }
-    public static func &= (lhs: inout TaskState, rhs: UInt16) {
+    public static func &= (lhs: inout TaskState, rhs: IntegerLiteralType) {
         lhs.rawValue = lhs & rhs
     }
 
-    public static func | (lhs: TaskState, rhs: TaskState) -> UInt16 {
+    public static func | (lhs: TaskState, rhs: TaskState) -> IntegerLiteralType {
         return lhs.rawValue | rhs.rawValue
     }
-    public static func | (lhs: UInt16, rhs: TaskState) -> UInt16 {
-        return lhs | rhs.rawValue
-    }
-    public static func | (lhs: TaskState, rhs: UInt16) -> UInt16 {
+    public static func | (lhs: TaskState, rhs: IntegerLiteralType) -> IntegerLiteralType {
         return lhs.rawValue | rhs
     }
     public static func |= (lhs: inout TaskState, rhs: TaskState) {
         lhs.rawValue = lhs | rhs.rawValue
     }
-    public static func |= (lhs: inout UInt16, rhs: TaskState) {
-        lhs = lhs | rhs.rawValue
-    }
-    public static func |= (lhs: inout TaskState, rhs: UInt16) {
+    public static func |= (lhs: inout TaskState, rhs: IntegerLiteralType) {
         lhs.rawValue = lhs | rhs
     }
 
-    public static prefix func ~ (state: TaskState) -> UInt16 {
+    public static prefix func ~ (state: TaskState) -> IntegerLiteralType {
         return ~state.rawValue
+    }
+}
+
+extension TaskState.IntegerLiteralType {
+    public static func == (lhs: TaskState.IntegerLiteralType, rhs: TaskState) -> Bool {
+        return lhs == rhs.rawValue
+    }
+    public static func & (lhs: TaskState.IntegerLiteralType, rhs: TaskState) -> TaskState.IntegerLiteralType {
+        return lhs & rhs.rawValue
+    }
+    public static func &= (lhs: inout IntegerLiteralType, rhs: TaskState) {
+        lhs = lhs & rhs.rawValue
+    }
+    public static func | (lhs: TaskState.IntegerLiteralType, rhs: TaskState) -> TaskState.IntegerLiteralType {
+        return lhs | rhs.rawValue
+    }
+    public static func |= (lhs: inout IntegerLiteralType, rhs: TaskState) {
+        lhs = lhs | rhs.rawValue
     }
 }

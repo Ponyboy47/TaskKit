@@ -68,25 +68,25 @@ open class LinkedTaskQueue: TaskQueue {
 
     public convenience init(name: String, maxSimultaneous: Int = LinkedTaskQueue.defaultMaxSimultaneous, linkedTo queue: LinkedTaskQueue, options: DependentTaskOption = []) {
         self.init(name: name, maxSimultaneous: maxSimultaneous)
-        self.add(link: queue)
+        self.link(to: queue)
     }
 
     public convenience init(name: String, maxSimultaneous: Int = LinkedTaskQueue.defaultMaxSimultaneous, linkedTo queues: [LinkedTaskQueue], options: DependentTaskOption = []) {
         self.init(name: name, maxSimultaneous: maxSimultaneous)
-        self.add(links: queues)
+        self.link(to: queues)
     }
 
     public convenience init(name: String, maxSimultaneous: Int = LinkedTaskQueue.defaultMaxSimultaneous, linkedTo queues: LinkedTaskQueue..., options: DependentTaskOption = []) {
         self.init(name: name, maxSimultaneous: maxSimultaneous)
-        self.add(links: queues)
+        self.link(to: queues)
     }
 
     public convenience init(name: String, maxSimultaneous: Int = LinkedTaskQueue.defaultMaxSimultaneous, linkedTo queues: Set<LinkedTaskQueue>, options: DependentTaskOption = []) {
         self.init(name: name, maxSimultaneous: maxSimultaneous)
-        self.add(links: queues)
+        self.link(to: queues)
     }
 
-    public func addLink(to queue: LinkedTaskQueue) {
+    public func link(to queue: LinkedTaskQueue) {
         _linkedQueuesQueue.async(flags: .barrier) {
             self.linkedQueues.insert(queue)
 
@@ -94,12 +94,12 @@ open class LinkedTaskQueue: TaskQueue {
                 return queue.linkedQueues.contains(self)
             }
             if !hasLink {
-                queue.addLink(to: self)
+                queue.link(to: self)
             }
         }
     }
 
-    public func addLinks(to queues: [LinkedTaskQueue]) {
+    public func link(to queues: Set<LinkedTaskQueue>) {
         _linkedQueuesQueue.async(flags: .barrier) {
             self.linkedQueues.formUnion(queues)
 
@@ -108,45 +108,56 @@ open class LinkedTaskQueue: TaskQueue {
                     return queue.linkedQueues.contains(self)
                 }
                 if !hasLink {
-                    queue.addLink(to: self)
+                    queue.link(to: self)
                 }
             }
         }
     }
 
-    public func addLinks(to queues: LinkedTaskQueue...) {
-        addLinks(to: queues)
+    public func link(to queues: [LinkedTaskQueue]) {
+        link(to: Set(queues))
     }
 
-    public func addLinks(to queues: Set<LinkedTaskQueue>) {
-        addLinks(to: Array(queues))
+    public func link(to queue: LinkedTaskQueue, _ queues: LinkedTaskQueue...) {
+        link(to: [queue] + queues)
     }
 
-    public func add(link queue: LinkedTaskQueue) {
-        addLink(to: queue)
-    }
-
-    public func add(links queues: [LinkedTaskQueue]) {
-        addLinks(to: queues)
-    }
-
-    public func add(links queues: LinkedTaskQueue...) {
-        addLinks(to: queues)
-    }
-
-    public func add(links queues: Set<LinkedTaskQueue>) {
-        addLinks(to: queues)
+    override open func insertIndex(of task: Task) -> Array<Task>.Index? {
+        return tasks.firstIndex(where: {
+            // If the current task is a higher priority than the one to insert,
+            // then the one to insert should be placed after the current index
+            guard $0.priority <= task.priority else { return false }
+            // If the task to insert has a higher priority than the current
+            // task, then it should be inserted at the current index
+            guard $0.priority == task.priority else { return true }
+            // If the tasks have equal priority and the current task is not a
+            // DependentTask, then the task to insert should be placed at the
+            // current index
+            guard $0 is DependentTask else { return true }
+            guard task is DependentTask else {
+                return ($0 as! DependentTask).incompleteDependencies.isEmpty
+            }
+            return ($0 as! DependentTask).incompleteDependencies.count < (task as! DependentTask).incompleteDependencies.count
+        })
     }
 
     override class func sort(_ array: inout [Task]) {
         array.sort { 
-            guard $0.priority <= $1.priority else { return true }
-            guard $0.priority == $1.priority else { return false }
-            guard $0 is DependentTask else { return true }
+            // If $1 is a higher priority than $0, they need to be switched
+            guard $0.priority <= $1.priority else { return false }
+            // If $1 is a lower priority than $0, nothing needs to happen
+            guard $0.priority == $1.priority else { return true }
+            // If $0 is not a dependent task, then they should be switched
+            guard $0 is DependentTask else { return false }
+            // If $1 is not a DependentTask, but $0 is, then whether or not
+            // they switch places is dependent on whether or not $0 has any
+            // incomplete dependencies
             guard $1 is DependentTask else {
-                return ($0 as! DependentTask).incompleteDependencies.isEmpty
+                return !($0 as! DependentTask).incompleteDependencies.isEmpty
             }
-            return ($0 as! DependentTask).incompleteDependencies.count < ($1 as! DependentTask).incompleteDependencies.count
+            // If they're both DependentTasks then whichever has more
+            // dependencies left should be first
+            return ($0 as! DependentTask).incompleteDependencies.count > ($1 as! DependentTask).incompleteDependencies.count
         }
     }
 
@@ -156,7 +167,7 @@ open class LinkedTaskQueue: TaskQueue {
         _linkedQueuesQueue.sync {
             for queue in linkedQueues {
                 let breakOut: Bool = queue._tasksQueue.sync {
-                    if queue.tasks.first(where: { $0.id == task.id }) != nil {
+                    if queue.tasks.first(where: { $0 == task }) != nil {
                         index = linkedQueues.index(of: queue)
                         return true
                     }
@@ -202,7 +213,7 @@ open class LinkedTaskQueue: TaskQueue {
                     let group = linkedQueues[index]._groupsQueue.sync { return linkedQueues[index]._groups[dep.id] }
                     guard group != nil else { continue }
                     groups.append(group!)
-                } else if tasks.index(where: { $0.id == dep.id }) != nil {
+                } else if tasks.index(where: { $0 == dep }) != nil {
                     if changed {
                         _tasksQueue.async(flags: .barrier) {
                             type(of: self).sort(&self.tasks)
