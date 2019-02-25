@@ -5,9 +5,17 @@ public protocol TaskQueue: class {
     var frequency: DispatchTimeInterval { get }
     var count: Int { get }
     var isEmpty: Bool { get }
+    var running: Task? { get set }
 
     func queue<T: Task>(task: T)
     func dequeue() -> Task?
+
+    /**
+    Used to signal to the TaskQueue that a task has finished running. If the
+    task failed you may want to requeue it or if it succeeded then you might
+    want to officially remove it from the array/storage of queued tasks
+    **/
+    func complete(task: Task)
 }
 
 public let defaultFrequency: DispatchTimeInterval = .seconds(5)
@@ -30,9 +38,42 @@ extension TaskQueue {
         queue.async(execute: _runner!)
     }
 
-    private func runNext(on queue: DispatchQueue) {
-        guard _runner != nil else { return }
+    @discardableResult
+    private func run(task: Task, on queue: DispatchQueue) -> Bool {
+        switch task {
+        case is DependentTask:
+            guard runDependencies(of: task as! DependentTask, on: queue) else {
+                task.state = .failed
+                return false
+            }
+        default: break
+        }
 
+        guard _runner != nil else { return false }
+
+        defer {
+            running = nil
+            queue.async {
+                self.complete(task: task)
+            }
+        }
+
+        task.state = .executing
+        running = task
+        task.state = task.execute() ? .succeeded : .failed
+
+        return task.state == .succeeded
+    }
+
+    private func runDependencies(of task: DependentTask, on queue: DispatchQueue) -> Bool {
+        while let dep = task.nextDependency() {
+            guard run(task: dep, on: queue) else { return false }
+        }
+
+        return true
+    }
+
+    private func runNext(on queue: DispatchQueue) {
         defer {
             let runner = DispatchWorkItem() {
                 self.runNext(on: queue)
@@ -48,15 +89,22 @@ extension TaskQueue {
         }
 
         guard let next = dequeue() else { return }
-
-        next.state = .executing
-        next.state = next.execute() ? .succeeded : .failed
+        run(task: next, on: queue)
     }
 
     public func stop() {
         guard _runner != nil else { return }
         defer { _runner = nil }
 
+        if let active = running {
+            switch active {
+            case is PausableTask: active.state = (active as! PausableTask).pause() ? .paused : .failed
+            default: active.state = .cancelled
+            }
+        }
+
         _runner!.cancel()
     }
+
+    public func complete(task: Task) {}
 }

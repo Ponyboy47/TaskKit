@@ -12,6 +12,7 @@ open class LocalTaskQueue: TaskQueue {
     }
     public var isEmpty: Bool { return tasks.isEmpty }
     public var frequency: DispatchTimeInterval
+    public var running: Task? = nil
 
     public init(frequency: DispatchTimeInterval = defaultFrequency) {
         self.frequency = frequency
