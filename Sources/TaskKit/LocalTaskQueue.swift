@@ -6,12 +6,10 @@ open class LocalTaskQueue: TaskQueue {
     public private(set) var tasks: [TaskPriority: [Task]] = [:]
     public var _runner: DispatchWorkItem? = nil
     public var count: Int {
-        var count = 0
-        tasks.forEach { count += $0.1.count }
-        return count
+        return tasks.reduce(0, { return $0 + $1.1.count })
     }
     public var isEmpty: Bool { return tasks.isEmpty }
-    public var frequency: DispatchTimeInterval
+    public let frequency: DispatchTimeInterval
     public var running: Task? = nil
 
     public init(frequency: DispatchTimeInterval = defaultFrequency) {

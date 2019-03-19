@@ -40,6 +40,13 @@ extension TaskQueue {
 
     @discardableResult
     private func run(task: Task, on queue: DispatchQueue) -> Bool {
+        defer {
+            running = nil
+            queue.async {
+                self.complete(task: task)
+            }
+        }
+
         switch task {
         case is DependentTask:
             guard runDependencies(of: task as! DependentTask, on: queue) else {
@@ -50,13 +57,6 @@ extension TaskQueue {
         }
 
         guard _runner != nil else { return false }
-
-        defer {
-            running = nil
-            queue.async {
-                self.complete(task: task)
-            }
-        }
 
         task.state = .executing
         running = task
