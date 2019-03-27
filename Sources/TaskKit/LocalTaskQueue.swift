@@ -1,16 +1,17 @@
-import class Dispatch.DispatchWorkItem
 import enum Dispatch.DispatchTimeInterval
+import class Dispatch.DispatchWorkItem
 
 /// A TaskQueue that keeps its list of tasks in a local dictionary
 open class LocalTaskQueue: TaskQueue {
     public private(set) var tasks: [TaskPriority: [Task]] = [:]
-    public var _runner: DispatchWorkItem? = nil
+    public var _runner: DispatchWorkItem?
     public var count: Int {
-        return tasks.reduce(0, { return $0 + $1.1.count })
+        return tasks.reduce(0) { $0 + $1.1.count }
     }
+
     public var isEmpty: Bool { return tasks.isEmpty }
     public let frequency: DispatchTimeInterval
-    public var running: Task? = nil
+    public var running: Task?
 
     public init(frequency: DispatchTimeInterval = defaultFrequency) {
         self.frequency = frequency

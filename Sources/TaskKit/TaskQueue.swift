@@ -1,6 +1,6 @@
 import Dispatch
 
-public protocol TaskQueue: class {
+public protocol TaskQueue: AnyObject {
     var _runner: DispatchWorkItem? { get set }
     var frequency: DispatchTimeInterval { get }
     var count: Int { get }
@@ -11,10 +11,10 @@ public protocol TaskQueue: class {
     func dequeue() -> Task?
 
     /**
-    Used to signal to the TaskQueue that a task has finished running. If the
-    task failed you may want to requeue it or if it succeeded then you might
-    want to officially remove it from the array/storage of queued tasks
-    **/
+     Used to signal to the TaskQueue that a task has finished running. If the
+     task failed you may want to requeue it or if it succeeded then you might
+     want to officially remove it from the array/storage of queued tasks
+     **/
     func complete(task: Task)
 }
 
@@ -31,7 +31,7 @@ extension TaskQueue {
     public func start(on queue: DispatchQueue) {
         guard _runner == nil else { return }
 
-        _runner = DispatchWorkItem() {
+        _runner = DispatchWorkItem {
             self.runNext(on: queue)
         }
 
@@ -75,7 +75,7 @@ extension TaskQueue {
 
     private func runNext(on queue: DispatchQueue) {
         defer {
-            let runner = DispatchWorkItem() {
+            let runner = DispatchWorkItem {
                 self.runNext(on: queue)
             }
 
@@ -106,5 +106,5 @@ extension TaskQueue {
         _runner!.cancel()
     }
 
-    public func complete(task: Task) {}
+    public func complete(task _: Task) {}
 }

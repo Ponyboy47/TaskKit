@@ -1,5 +1,5 @@
 /// A Type that performs work on a TaskQueue
-public protocol Task: class, Codable {
+public protocol Task: AnyObject, Codable {
     var priority: TaskPriority { get }
     var state: TaskState { get set }
     func execute() -> Bool
@@ -23,9 +23,9 @@ public protocol DependentTask: Task {
 }
 
 /**
-How important a Task is. Higher priorities generally mean that a task is more
-likely to be executed sooner
-**/
+ How important a Task is. Higher priorities generally mean that a task is more
+ likely to be executed sooner
+ **/
 public enum TaskPriority: RawRepresentable, ExpressibleByIntegerLiteral, Hashable, Comparable, Codable {
     public typealias RawValue = UInt8
     public typealias IntegerLiteralType = RawValue
@@ -77,10 +77,10 @@ public enum TaskPriority: RawRepresentable, ExpressibleByIntegerLiteral, Hashabl
 }
 
 /**
-The current state of your task. Tasks will only be executed if they are in the
-ready state. Upon completion, a task will be in either the succeeded or failed
-states
-**/
+ The current state of your task. Tasks will only be executed if they are in the
+ ready state. Upon completion, a task will be in either the succeeded or failed
+ states
+ **/
 public enum TaskState: Int8, Hashable, Codable {
     /// The task is not ready to execute
     case notReady
